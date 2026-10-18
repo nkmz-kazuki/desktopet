@@ -39,7 +39,7 @@ function installMockBridge() {
     },
     clearChat: async () => record('clearChat'),
     setChatLayout: async (layout) => { settings.chatLayout = layout; return layout; },
-    setIgnoreMouse: () => {},
+    setIgnoreMouse: (ignore) => record('setIgnoreMouse', ignore),
     moveBy: (x, y) => record('moveBy', { x, y }),
     openApiKeys: async () => record('openApiKeys'),
     openConversationFolder: async () => record('openConversationFolder'),
@@ -116,6 +116,59 @@ async function runElectronChecks() {
   await window.loadFile(path.join(rootDirectory, 'src', 'index.html'), { query: { preview: '1' } });
   await waitFor('document.querySelectorAll("#messages .message").length === 1');
   await evaluate('Promise.all([...document.images].map(image => image.decode()))');
+  await evaluate(`window.__qaReadPoseGeometry = () => {
+    const visual = document.querySelector('#petVisual');
+    const visualStyle = getComputedStyle(visual);
+    const matrixOf = style => new DOMMatrix(style.transform === 'none' ? undefined : style.transform);
+    const originOf = style => style.transformOrigin.split(' ').map(Number.parseFloat);
+    const transformPoint = (matrix, origin, point) => {
+      const transformed = matrix.transformPoint(new DOMPoint(point.x - origin[0], point.y - origin[1]));
+      return { x: transformed.x + origin[0], y: transformed.y + origin[1] };
+    };
+    const parentMatrix = matrixOf(visualStyle);
+    const parentOrigin = originOf(visualStyle);
+    const parentRect = visual.getBoundingClientRect();
+    const corners = [
+      { x: 0, y: 0 }, { x: visual.offsetWidth, y: 0 },
+      { x: 0, y: visual.offsetHeight }, { x: visual.offsetWidth, y: visual.offsetHeight },
+    ].map(point => transformPoint(parentMatrix, parentOrigin, point));
+    const parentLayout = {
+      x: parentRect.left - Math.min(...corners.map(point => point.x)),
+      y: parentRect.top - Math.min(...corners.map(point => point.y)),
+    };
+    const pointFor = (selector, sourcePoint) => {
+      const image = document.querySelector(selector);
+      const style = getComputedStyle(image);
+      const matrix = matrixOf(style);
+      const width = parseFloat(style.width);
+      const height = parseFloat(style.height);
+      const fit = Math.min(width / image.naturalWidth, height / image.naturalHeight);
+      const position = style.objectPosition.split(' ');
+      const offset = (token, freeSpace) => token.endsWith('%') ? parseFloat(token) / 100 * freeSpace : parseFloat(token);
+      const pointInImage = {
+        x: offset(position[0], width - image.naturalWidth * fit) + sourcePoint.x * fit,
+        y: offset(position[1], height - image.naturalHeight * fit) + sourcePoint.y * fit,
+      };
+      const imagePoint = transformPoint(matrix, originOf(style), pointInImage);
+      const point = transformPoint(parentMatrix, parentOrigin, {
+        x: image.offsetLeft + imagePoint.x, y: image.offsetTop + imagePoint.y,
+      });
+      return {
+        x: parentLayout.x + point.x, y: parentLayout.y + point.y,
+        registration: [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f],
+        naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight,
+        objectFit: style.objectFit, opacity: Number(style.opacity),
+      };
+    };
+    return {
+      elapsed: performance.now() - (window.__qaPoseStartedAt || performance.now()),
+      happy: visual.classList.contains('happy'),
+      parentLeft: parentRect.left,
+      parentMatrix: [parentMatrix.a, parentMatrix.b, parentMatrix.c, parentMatrix.d],
+      base: pointFor('#petImage', { x: 620, y: 834 }),
+      smile: pointFor('#petHappyImage', { x: 587, y: 832 }),
+    };
+  }; void 0;`);
   await delay(750);
   await evaluate('window.__qa.emit("chat")');
   await capture('standard');
@@ -216,6 +269,115 @@ async function runElectronChecks() {
     answerGeometry.answerBottom <= answerGeometry.viewportBottom, { characters: longAnswer.length, height: answerGeometry.height, scrollHeight: answerGeometry.messageScrollHeight });
   check('model completion restores resting pose', !answerGeometry.happy);
   await capture('long-answer-bottom');
+
+  const samplePoseFrame = () => evaluate('new Promise(resolve => requestAnimationFrame(() => resolve(window.__qaReadPoseGeometry())))');
+  const horizontalRange = (frames, read) => Math.max(...frames.map(read)) - Math.min(...frames.map(read));
+  const checkPoseGeometry = (name, frames, scale) => {
+    const metrics = {
+      scale, frames: frames.length,
+      parentDrift: horizontalRange(frames, frame => frame.parentLeft),
+      baseAnchorDrift: horizontalRange(frames, frame => frame.base.x),
+      smileAnchorDrift: horizontalRange(frames, frame => frame.smile.x),
+      maximumAnchorDifference: Math.max(...frames.map(frame => Math.abs(frame.base.x - frame.smile.x))),
+      baseRegistration: frames[0].base.registration,
+      smileRegistration: frames[0].smile.registration,
+    };
+    const correctAssets = frames.every(frame => [frame.base, frame.smile].every(layer =>
+      layer.naturalWidth === 1024 && layer.naturalHeight === 1536 && layer.objectFit === 'contain'));
+    const fixedRegistrations = frames.every(frame => ['base', 'smile'].every(layer =>
+      frame[layer].registration.every((value, index) => Math.abs(value - frames[0][layer].registration[index]) < .000001)));
+    const fixedParentScale = frames.every(frame => Math.abs(frame.parentMatrix[0] - scale) < .000001 &&
+      Math.abs(frame.parentMatrix[3] - scale) < .000001 &&
+      Math.abs(frame.parentMatrix[1]) < .000001 && Math.abs(frame.parentMatrix[2]) < .000001);
+    check(name, correctAssets && fixedRegistrations && fixedParentScale &&
+      metrics.parentDrift < .3 && metrics.baseAnchorDrift < .3 && metrics.smileAnchorDrift < .3 &&
+      metrics.maximumAnchorDifference < 2, metrics);
+  };
+  for (const scale of [.78, 1, 1.18]) {
+    await evaluate(`applySettings({ scale: ${scale} }); closePanels();`);
+    await settle();
+    const before = [];
+    for (let index = 0; index < 3; index += 1) before.push(await samplePoseFrame());
+    if (scale === 1) await capture('pose-aligned-idle');
+    await evaluate('window.__qaPoseStartedAt = performance.now(); showHappyPose(800)');
+    const switching = [];
+    for (let index = 0; index < 180 && (index < 40 || switching.at(-1).elapsed < 1250); index += 1) {
+      switching.push(await samplePoseFrame());
+    }
+    checkPoseGeometry(`registered character anchors stay fixed during pose crossfade at scale ${scale}`, [...before, ...switching], scale);
+    const held = switching.filter(frame => frame.elapsed >= 100 && frame.elapsed <= 700);
+    const restored = switching.filter(frame => frame.elapsed >= 850);
+    const finalFrame = switching.at(-1);
+    check(`click pose holds for 0.8 seconds then restores at scale ${scale}`,
+      held.length >= 10 && held.every(frame => frame.happy) && restored.length >= 5 && restored.every(frame => !frame.happy) &&
+      finalFrame.elapsed >= 1150 && finalFrame.base.opacity > .99 && finalFrame.smile.opacity < .01,
+      { scale, heldFrames: held.length, restoredFrames: restored.length, finalElapsed: finalFrame.elapsed });
+    if (scale === 1) {
+      await evaluate('showHappyPose(800)');
+      await capture('pose-aligned-happy');
+      await delay(850);
+    }
+  }
+  await evaluate('applySettings({ scale: 1 }); animateHello()');
+  const helloFrames = [];
+  for (let index = 0; index < 24; index += 1) helloFrames.push(await samplePoseFrame());
+  checkPoseGeometry('greeting animation does not move character anchors horizontally', helloFrames, 1);
+  await evaluate('window.__qaPoseStartedAt = performance.now(); document.querySelector("#chatInput").value = "再陪我聊一会儿吧。"; document.querySelector("#chatForm").requestSubmit()');
+  await waitFor('window.__qa.snapshot().answerPending');
+  const thinkingFrames = [];
+  for (let index = 0; index < 180 && (index < 32 || thinkingFrames.at(-1).elapsed < 1100); index += 1) thinkingFrames.push(await samplePoseFrame());
+  checkPoseGeometry('model thinking animation keeps both registered poses horizontally aligned', thinkingFrames, 1);
+  check('model holds smile beyond the short click interval', thinkingFrames.at(-1).elapsed > 850 && thinkingFrames.every(frame => frame.happy));
+  await evaluate('window.__qa.answer("我在这里。")');
+  await waitFor('!document.querySelector("#sendBtn").disabled');
+  await settle();
+  await evaluate('applySettings({ scale: .78 }); closePanels(); holdHappyPose(true)');
+  await settle();
+  const tailPoint = await evaluate(`(() => {
+    const visual = document.querySelector('#petVisual');
+    const image = document.querySelector('#petHappyImage');
+    const rect = visual.getBoundingClientRect();
+    const imageRect = image.getBoundingClientRect();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(image, 0, 0);
+    const fit = Math.min(imageRect.width / image.naturalWidth, imageRect.height / image.naturalHeight);
+    const offsetX = (imageRect.width - image.naturalWidth * fit) / 2;
+    const offsetY = (imageRect.height - image.naturalHeight * fit) / 2;
+    for (let x = Math.min(innerWidth - 2, Math.floor(imageRect.right) - 2); x > rect.right + 1; x -= 1) {
+      for (let y = Math.ceil(imageRect.top) + 2; y < Math.min(innerHeight - 2, imageRect.bottom - 2); y += 1) {
+        const sourceX = Math.floor((x - imageRect.left - offsetX) / fit);
+        const sourceY = Math.floor((y - imageRect.top - offsetY) / fit);
+        if (sourceX < 1 || sourceY < 1 || sourceX >= canvas.width - 1 || sourceY >= canvas.height - 1) continue;
+        const pixels = context.getImageData(sourceX - 1, sourceY - 1, 3, 3).data;
+        if (!Array.from({ length: 9 }, (_, index) => pixels[index * 4 + 3]).every(alpha => alpha > 240)) continue;
+        return { x, y, outsideBy: x - rect.right, opaque: isOpaquePixel(x, y),
+          domTarget: document.elementFromPoint(x, y)?.id,
+          reachesPet: Boolean(document.elementFromPoint(x, y)?.closest('#petVisual')) };
+      }
+    }
+    return null;
+  })()`);
+  check('registered tail outside parent remains opaque and receives DOM events',
+    Boolean(tailPoint && tailPoint.outsideBy > 1 && tailPoint.opaque && tailPoint.reachesPet), tailPoint || {});
+  window.webContents.sendInputEvent({ type: 'mouseMove', x: 8, y: 8 });
+  await delay(60);
+  check('transparent background enables mouse pass-through', await evaluate('window.__qa.snapshot().calls.filter(call => call.name === "setIgnoreMouse").at(-1)?.value === true'));
+  window.webContents.sendInputEvent({ type: 'mouseMove', x: tailPoint.x, y: tailPoint.y });
+  await delay(60);
+  check('opaque extended tail disables mouse pass-through', await evaluate('window.__qa.snapshot().calls.filter(call => call.name === "setIgnoreMouse").at(-1)?.value === false'));
+  window.webContents.sendInputEvent({ type: 'mouseDown', x: tailPoint.x, y: tailPoint.y, button: 'left', clickCount: 1 });
+  window.webContents.sendInputEvent({ type: 'mouseUp', x: tailPoint.x, y: tailPoint.y, button: 'left', clickCount: 1 });
+  await waitFor('document.querySelector("#chatPanel").classList.contains("open")');
+  await evaluate('holdHappyPose(false)');
+  check('real tail click opens chat and keeps the short smile without a hello jump', await evaluate('document.querySelector("#petVisual").classList.contains("happy") && !document.querySelector("#petVisual").classList.contains("hello")'));
+  window.webContents.sendInputEvent({ type: 'mouseDown', x: tailPoint.x, y: tailPoint.y, button: 'left', clickCount: 1 });
+  window.webContents.sendInputEvent({ type: 'mouseUp', x: tailPoint.x, y: tailPoint.y, button: 'left', clickCount: 1 });
+  await waitFor('!document.querySelector("#chatPanel").classList.contains("open")');
+  check('second real tail click closes chat without moving the window', await evaluate('window.__qa.snapshot().calls.filter(call => call.name === "moveBy").length === 0'));
+  await delay(850);
   await evaluate('window.__qa.emit("settings"); document.querySelector("#scaleInput").value = "1.18"; document.querySelector("#scaleInput").dispatchEvent(new Event("input", { bubbles: true }))');
   const bubbleTop = await evaluate('parseFloat(getComputedStyle(document.querySelector("#speechBubble")).top)');
   check('greeting stays inside stage at largest scale', bubbleTop >= 12, { bubbleTop });

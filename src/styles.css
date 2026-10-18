@@ -66,6 +66,7 @@ button { -webkit-app-region: no-drag; }
   width: 403px;
   height: 604px;
   transform-origin: 55% 100%;
+  transform: scale(var(--pet-scale, 1));
   opacity: var(--pet-opacity);
   filter: drop-shadow(0 15px 16px rgba(55, 48, 95, .21));
   cursor: grab;
@@ -82,28 +83,26 @@ button { -webkit-app-region: no-drag; }
   object-fit: contain;
   pointer-events: none;
   user-select: none;
-  transition: opacity 320ms ease, transform 360ms cubic-bezier(.2,.8,.2,1);
-  will-change: opacity, transform;
+  transition: opacity 320ms ease;
+  will-change: opacity;
 }
 
 .pet-image-base {
   opacity: 1;
-  transform: scale(1);
 }
 
 .pet-image-happy {
   opacity: 0;
-  transform: scale(.985);
+  transform: translateX(3.125%);
+  pointer-events: auto;
 }
 
 .pet-visual.happy .pet-image-base {
   opacity: 0;
-  transform: scale(.992);
 }
 
 .pet-visual.happy .pet-image-happy {
   opacity: 1;
-  transform: scale(1);
 }
 
 .pet-visual:hover {
@@ -120,19 +119,19 @@ button { -webkit-app-region: no-drag; }
 .pet-visual.thinking { animation: thinking 1s ease-in-out infinite; }
 
 @keyframes breathe {
-  0%, 100% { transform: translateY(0) rotate(-0.25deg) scale(var(--pet-scale, 1)); }
-  50% { transform: translateY(-6px) rotate(0.35deg) scale(calc(var(--pet-scale, 1) * 1.008)); }
+  0%, 100% { transform: translateY(0) scale(var(--pet-scale, 1)); }
+  50% { transform: translateY(-6px) scale(var(--pet-scale, 1)); }
 }
 
 @keyframes hello {
-  0%, 100% { transform: translateY(0) rotate(0) scale(var(--pet-scale, 1)); }
-  38% { transform: translateY(-17px) rotate(-1.5deg) scale(calc(var(--pet-scale, 1) * 1.035)); }
-  68% { transform: translateY(-5px) rotate(1deg) scale(calc(var(--pet-scale, 1) * .99)); }
+  0%, 100% { transform: translateY(0) scale(var(--pet-scale, 1)); }
+  38% { transform: translateY(-17px) scale(var(--pet-scale, 1)); }
+  68% { transform: translateY(-5px) scale(var(--pet-scale, 1)); }
 }
 
 @keyframes thinking {
-  0%, 100% { transform: translateY(0) rotate(-.5deg) scale(var(--pet-scale, 1)); }
-  50% { transform: translateY(-8px) rotate(.8deg) scale(var(--pet-scale, 1)); }
+  0%, 100% { transform: translateY(0) scale(var(--pet-scale, 1)); }
+  50% { transform: translateY(-8px) scale(var(--pet-scale, 1)); }
 }
 
 .speech-bubble {

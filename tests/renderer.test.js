@@ -164,6 +164,7 @@ test('click happiness lasts 800 ms, restarts on another click, and dragging does
   const harness = await rendererHarness();
   await harness.clickPet();
   assert.equal(harness.get('petVisual').classList.contains('happy'), true);
+  assert.equal(harness.get('petVisual').classList.contains('hello'), false);
   await harness.advance(799);
   assert.equal(harness.get('petVisual').classList.contains('happy'), true);
   await harness.advance(1);

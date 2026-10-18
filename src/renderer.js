@@ -110,20 +110,32 @@ function setMouseIgnore(ignore) {
 function isOpaquePixel(clientX, clientY) {
   if (!alphaContext || !els.petImage.complete || !els.petHappyImage.complete) return true;
   const rect = els.petVisual.getBoundingClientRect();
-  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return false;
-  const x = Math.max(0, Math.min(alphaCanvas.width - 1, Math.floor((clientX - rect.left) / rect.width * alphaCanvas.width)));
-  const y = Math.max(0, Math.min(alphaCanvas.height - 1, Math.floor((clientY - rect.top) / rect.height * alphaCanvas.height)));
+  const x = Math.floor((clientX - rect.left) / rect.width * els.petImage.naturalWidth);
+  const y = Math.floor((clientY - rect.top) / rect.height * els.petImage.naturalHeight);
+  if (x < 0 || x >= alphaCanvas.width || y < 0 || y >= alphaCanvas.height) return false;
   return alphaContext.getImageData(x, y, 1, 1).data[3] > 18;
 }
 
 function prepareAlphaMap() {
   if (!els.petImage.complete || !els.petHappyImage.complete) return;
+  const imageWidth = els.petImage.naturalWidth;
+  const imageHeight = els.petImage.naturalHeight;
+  const happyStyle = window.getComputedStyle(els.petHappyImage);
+  const registration = new DOMMatrixReadOnly(happyStyle.transform);
+  const offsetX = registration.e * imageWidth / parseFloat(happyStyle.width);
+  const offsetY = registration.f * imageHeight / parseFloat(happyStyle.height);
   alphaCanvas = document.createElement('canvas');
-  alphaCanvas.width = els.petImage.naturalWidth;
-  alphaCanvas.height = els.petImage.naturalHeight;
+  alphaCanvas.width = imageWidth + Math.max(0, Math.ceil(offsetX));
+  alphaCanvas.height = imageHeight + Math.max(0, Math.ceil(offsetY));
   alphaContext = alphaCanvas.getContext('2d', { willReadFrequently: true });
   alphaContext.drawImage(els.petImage, 0, 0);
-  alphaContext.drawImage(els.petHappyImage, 0, 0, alphaCanvas.width, alphaCanvas.height);
+  alphaContext.save();
+  alphaContext.setTransform(
+    registration.a, registration.b, registration.c, registration.d,
+    offsetX, offsetY,
+  );
+  alphaContext.drawImage(els.petHappyImage, 0, 0, imageWidth, imageHeight);
+  alphaContext.restore();
 }
 
 function updateMousePassThrough(event) {
@@ -486,7 +498,6 @@ function endDrag(event) {
   if (moved < 8) {
     sparkle(event.clientX, event.clientY);
     showHappyPose(800);
-    animateHello();
     toggleChat();
   }
 }
