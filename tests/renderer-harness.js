@@ -23,7 +23,7 @@ async function rendererHarness(options = {}) {
   const opacityDefaults = { petOpacity: 100, chatOpacity: 80, messageOpacity: 88, inputOpacity: 92, textOpacity: 100, bubbleOpacity: 50 };
   let saved = {
     petName: '鲸鱼娘', city: '上海', reasoningEffort: 'medium', scale: 1,
-    chatLayout: 'standard', proactiveEnabled: true, voiceEnabled: false,
+    proactiveEnabled: true, voiceEnabled: false,
     quietStart: 23, quietEnd: 8, alwaysOnTop: true, launchAtLogin: false,
     conversationDirectory: path.resolve('example-conversations'), ...opacityDefaults, ...options.settings,
   };
@@ -145,7 +145,6 @@ async function rendererHarness(options = {}) {
       return options.sendChat ? options.sendChat(text) : { text: '已回答。', kind: 'model' };
     },
     chooseConversationDirectory: async () => { calls.chooseDirectory += 1; return options.selectedDirectory ?? null; },
-    setChatLayout: async (value) => value,
     setIgnoreMouse: (value) => calls.setIgnoreMouse.push(value),
     moveBy: (...values) => calls.moveBy.push(values),
     clearChat: async () => true,

@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
 const storeModule = require('../src/conversation-store');
 
 async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirectory,
@@ -34,27 +35,80 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
   const handlers = new Map();
   const eventHandlers = new Map();
   const positionChanges = [];
+  const windowCalls = [];
+  const rendererMessages = [];
+  const windowEvents = new EventEmitter();
+  const appEvents = new EventEmitter();
+  const powerEvents = new EventEmitter();
+  const trayEvents = new EventEmitter();
+  const readyCallbacks = [];
+  const windowState = { visible: true, minimized: false, destroyed: false, alwaysOnTop: false, nativeAlwaysOnTop: false, focused: false };
+  let windowOptions;
+  let trayMenu = [];
+  let quitCalls = 0;
   let bounds = { ...windowBounds };
   let cursor = { ...cursorPoint };
   let loginUpdates = 0;
   const testWindow = {
-    setAlwaysOnTop() {}, setVisibleOnAllWorkspaces() {}, loadFile() {}, once() {}, on() {},
-    isDestroyed: () => false,
+    setAlwaysOnTop(enabled, level) {
+      windowCalls.push(['setAlwaysOnTop', enabled, level]);
+      if (enabled !== windowState.alwaysOnTop) windowState.nativeAlwaysOnTop = enabled;
+      windowState.alwaysOnTop = enabled;
+    },
+    isAlwaysOnTop: () => windowState.alwaysOnTop,
+    setVisibleOnAllWorkspaces(...args) { windowCalls.push(['setVisibleOnAllWorkspaces', ...args]); },
+    loadFile() {},
+    once: (...args) => windowEvents.once(...args),
+    on: (...args) => windowEvents.on(...args),
+    isDestroyed: () => windowState.destroyed,
+    isVisible: () => windowState.visible && !windowState.minimized,
+    isMinimized: () => windowState.minimized,
+    showInactive() {
+      windowCalls.push(['showInactive']);
+      windowState.visible = true;
+      windowState.minimized = false;
+      windowEvents.emit('show');
+    },
+    hide() { windowCalls.push(['hide']); windowState.visible = false; windowEvents.emit('hide'); },
+    moveTop() { windowCalls.push(['moveTop']); windowState.visible = true; },
+    focus() { windowCalls.push(['focus']); windowState.focused = true; },
+    restore() {
+      windowCalls.push(['restore']);
+      windowState.visible = true;
+      windowState.minimized = false;
+      windowEvents.emit('restore');
+    },
+    setIgnoreMouseEvents(...args) { windowCalls.push(['setIgnoreMouseEvents', ...args]); },
+    webContents: { send: (channel, payload) => rendererMessages.push({ channel, payload }) },
     getBounds: () => ({ ...bounds }),
     getPosition: () => [bounds.x, bounds.y],
     setPosition: (x, y) => { bounds = { ...bounds, x, y }; positionChanges.push({ x, y }); },
   };
   const electron = {
     app: {
-      whenReady: () => ({ then() {} }), on() {},
+      whenReady: () => ({ then: (callback) => readyCallbacks.push(callback) }),
+      on: (...args) => appEvents.on(...args),
+      quit: () => { quitCalls += 1; appEvents.emit('before-quit'); },
       getPath: (name) => appPaths[name],
       setPath: (name, value) => { appPaths[name] = value; },
       setLoginItemSettings() { loginUpdates += 1; },
     },
     dialog: { showOpenDialog: async () => ({ canceled: !selectedDirectory, filePaths: selectedDirectory ? [selectedDirectory] : [] }) },
     BrowserWindow: function BrowserWindow(options) {
+      windowOptions = options;
       bounds = { x: options.x, y: options.y, width: options.width, height: options.height };
+      Object.assign(windowState, { visible: options.show !== false, minimized: false, destroyed: false,
+        alwaysOnTop: Boolean(options.alwaysOnTop), nativeAlwaysOnTop: Boolean(options.alwaysOnTop) });
       return testWindow;
+    },
+    powerMonitor: { on: (...args) => powerEvents.on(...args) },
+    Menu: { buildFromTemplate: (template) => template },
+    nativeImage: { createFromPath: () => ({ crop: () => ({ resize: () => ({}) }) }) },
+    Tray: function Tray() {
+      return {
+        setToolTip() {}, setContextMenu: (menu) => { trayMenu = menu; },
+        on: (...args) => trayEvents.on(...args),
+      };
     },
     ipcMain: {
       handle: (channel, handler) => handlers.set(channel, handler),
@@ -86,11 +140,32 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
     directory,
     appPaths,
     positionChanges,
+    windowCalls,
+    rendererMessages,
+    get windowState() { return { ...windowState }; },
+    get windowOptions() { return windowOptions; },
+    get quitCalls() { return quitCalls; },
+    setWindowState: (next) => { Object.assign(windowState, next); },
+    loseNativeTopmost: () => { windowState.nativeAlwaysOnTop = false; },
+    emitWindow: (event, ...args) => windowEvents.emit(event, ...args),
+    emitApp: (event, ...args) => appEvents.emit(event, ...args),
+    emitPower: (event, ...args) => powerEvents.emit(event, ...args),
+    emitTray: (event, ...args) => trayEvents.emit(event, ...args),
+    clickTray: (label) => {
+      const item = trayMenu.find((entry) => entry.label === label);
+      assert.ok(item && typeof item.click === 'function', `missing tray action: ${label}`);
+      return item.click();
+    },
+    startApp: async () => {
+      for (const callback of readyCallbacks.splice(0)) await callback();
+      await vm.runInContext('conversationStore.initialize()', context);
+    },
     get windowBounds() { return { ...bounds }; },
     constrain: (position, display, scale) => context.constrainWindowPosition(position, display, scale),
     restorePosition: () => context.restoreWindowPosition(),
     defaultPosition: () => context.defaultWindowPosition(),
     createWindow: () => context.createWindow(),
+    createTray: () => context.createTray(),
     setCursor: (point) => { cursor = { ...point }; },
     get loginUpdates() { return loginUpdates; },
   };

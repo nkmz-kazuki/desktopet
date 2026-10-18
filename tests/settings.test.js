@@ -14,12 +14,12 @@ test('migrates only settings and encrypted key, preserving customized preference
   assert.equal(settings.petName, '自定义昵称');
   assert.equal(settings.city, '北京');
   assert.equal(settings.reasoningEffort, 'high');
-  assert.equal(settings.chatLayout, 'compact');
+  assert.equal('chatLayout' in settings, false);
   assert.equal(settings.chatOpacity, 80);
   assert.equal(settings.petOpacity, 100);
   assert.equal(settings.conversationDirectory, path.join(appPaths.documents, '对话积累'));
   const saved = JSON.parse(await fs.readFile(path.join(appPaths.userData, 'settings.json'), 'utf8'));
-  for (const key of ['model', 'reminderMinutes', 'obsolete', 'apiKey']) assert.equal(key in saved, false);
+  for (const key of ['model', 'reminderMinutes', 'chatLayout', 'obsolete', 'apiKey']) assert.equal(key in saved, false);
   assert.equal(await fs.readFile(path.join(appPaths.userData, 'deepseek-key.bin'), 'utf8'), 'encrypted-test-fixture');
   assert.equal((await fs.readdir(appPaths.userData)).length, 2);
   assert.ok(await fs.stat(path.join(directory, 'qingyu-desktop-companion', 'settings.json')));
@@ -30,6 +30,25 @@ test('renames the previous built-in nickname and never replaces existing new-ver
   const settings = await invoke('settings:get');
   assert.equal(settings.petName, '鲸鱼娘');
   assert.equal(settings.city, '杭州');
+});
+
+test('removes an obsolete chat layout from existing settings without changing character scale or position', async (t) => {
+  const { invoke, appPaths } = await mainHarness(t, { saved: {
+    chatLayout: 'wide', scale: 0.88, windowPosition: { x: 820, y: 230 },
+  } });
+  const loaded = await invoke('settings:get');
+  assert.equal('chatLayout' in loaded, false);
+  assert.equal(loaded.scale, 0.88);
+  assert.equal(loaded.windowPosition.x, 820);
+  assert.equal(loaded.windowPosition.y, 230);
+  const initial = JSON.parse(await fs.readFile(path.join(appPaths.userData, 'settings.json'), 'utf8'));
+  assert.equal('chatLayout' in initial, false);
+  const next = await invoke('settings:save', { chatLayout: 'compact' });
+  assert.equal('chatLayout' in next, false);
+  const persisted = JSON.parse(await fs.readFile(path.join(appPaths.userData, 'settings.json'), 'utf8'));
+  assert.equal('chatLayout' in persisted, false);
+  assert.equal(persisted.scale, 0.88);
+  assert.deepEqual(persisted.windowPosition, { x: 820, y: 230 });
 });
 
 test('saves quoted absolute directories and bounded opacities without moving or overwriting previous conversation history', async (t) => {

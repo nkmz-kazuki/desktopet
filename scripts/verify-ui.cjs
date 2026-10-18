@@ -7,7 +7,7 @@ const outputDirectory = path.join(rootDirectory, 'dist', 'ui-check');
 const defaults = {
   petName: '鲸鱼娘', city: '上海', reasoningEffort: 'medium',
   proactiveEnabled: false, voiceEnabled: false, alwaysOnTop: false, launchAtLogin: false,
-  scale: 1, chatLayout: 'standard', apiKeySet: false,
+  scale: 1, apiKeySet: false,
   petOpacity: 100, chatOpacity: 80, messageOpacity: 88,
   inputOpacity: 92, textOpacity: 100, bubbleOpacity: 50,
   conversationDirectory: 'D:\\鲸鱼娘\\对话积累',
@@ -38,7 +38,6 @@ function installMockBridge() {
       return new Promise((resolve) => { pendingAnswer = resolve; });
     },
     clearChat: async () => record('clearChat'),
-    setChatLayout: async (layout) => { settings.chatLayout = layout; return layout; },
     setIgnoreMouse: (ignore) => record('setIgnoreMouse', ignore),
     moveBy: (x, y) => record('moveBy', { x, y }),
     openApiKeys: async () => record('openApiKeys'),
@@ -65,7 +64,7 @@ function installMockBridge() {
 }
 
 async function runElectronChecks() {
-  const { app, BrowserWindow, ipcMain } = require('electron');
+  const { app, BrowserWindow, ipcMain, nativeImage } = require('electron');
   const assert = require('node:assert/strict');
   const profileDirectory = process.env.WHALE_GIRL_QA_PROFILE;
   assert(profileDirectory, 'Run this check with node scripts/verify-ui.cjs');
@@ -173,6 +172,49 @@ async function runElectronChecks() {
   await evaluate('window.__qa.emit("chat")');
   await capture('standard');
 
+  const chatAppearance = await evaluate(`(() => {
+    const panel = document.querySelector('#chatPanel');
+    const bounds = panel.getBoundingClientRect();
+    const indicator = document.querySelector('.online-dot');
+    return {
+      hasScaleButton: Boolean(document.querySelector('#chatScaleBtn')),
+      status: document.querySelector('.panel-title > span').textContent.trim(),
+      indicatorColor: getComputedStyle(indicator).backgroundColor,
+      chatShadow: getComputedStyle(panel).boxShadow,
+      settingsShadow: getComputedStyle(document.querySelector('#settingsPanel')).boxShadow,
+      x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+    };
+  })()`);
+  check('chat resize control is absent', !chatAppearance.hasScaleButton);
+  check('chat status contains only the online label', chatAppearance.status === '在线', { status: chatAppearance.status });
+  const indicatorRgb = chatAppearance.indicatorColor.match(/^rgb\((\d+), (\d+), (\d+)\)$/)?.slice(1).map(Number);
+  check('online indicator is green', Boolean(indicatorRgb && indicatorRgb[1] > indicatorRgb[0] && indicatorRgb[1] > indicatorRgb[2]), { color: chatAppearance.indicatorColor });
+  check('chat and settings panels have no outer shadow', chatAppearance.chatShadow === 'none' && chatAppearance.settingsShadow === 'none', {
+    chatShadow: chatAppearance.chatShadow, settingsShadow: chatAppearance.settingsShadow,
+  });
+  check('chat uses fixed standard geometry', chatAppearance.x === 16 && chatAppearance.y === 29 && chatAppearance.width === 374 && chatAppearance.height === 654, {
+    x: chatAppearance.x, y: chatAppearance.y, width: chatAppearance.width, height: chatAppearance.height,
+  });
+  await evaluate('document.body.classList.remove("preview")');
+  try {
+    await settle();
+    const viewport = await evaluate('({ width: innerWidth, height: innerHeight, devicePixelRatio })');
+    const transparentCapture = await window.webContents.capturePage();
+    const png = transparentCapture.toPNG();
+    fs.writeFileSync(path.join(outputDirectory, 'panel-no-shadow-transparent.png'), png);
+    const bitmapImage = nativeImage.createFromBuffer(png);
+    const bitmapSize = bitmapImage.getSize();
+    const bitmap = bitmapImage.toBitmap();
+    const pixelX = Math.floor(2 * bitmapSize.width / viewport.width);
+    const pixelY = Math.floor(300 * bitmapSize.height / viewport.height);
+    const alpha = bitmap[(pixelY * bitmapSize.width + pixelX) * 4 + 3];
+    check('chat exterior is fully transparent in the rendered capture',
+      bitmap.length === bitmapSize.width * bitmapSize.height * 4 && alpha === 0,
+      { cssPoint: { x: 2, y: 300 }, bitmapPoint: { x: pixelX, y: pixelY }, alpha, bitmapSize, viewport });
+  } finally {
+    await evaluate('document.body.classList.add("preview")');
+  }
+
   const opacityDefaults = await evaluate(`Object.fromEntries(
     ['pet', 'chat', 'message', 'input', 'text', 'bubble'].map(name =>
       [name, Number(getComputedStyle(document.documentElement).getPropertyValue('--' + name + '-opacity'))]))`);
@@ -232,15 +274,7 @@ async function runElectronChecks() {
   })()`);
   await waitFor('!document.querySelector("#settingsPanel").classList.contains("open")');
 
-  await evaluate('window.__qa.emit("chat"); document.querySelector("#chatScaleBtn").click()');
-  await capture('wide');
-  let layout = await evaluate('({ name: document.querySelector("#app").dataset.chatLayout, width: document.querySelector("#chatPanel").getBoundingClientRect().width, height: document.querySelector("#chatPanel").getBoundingClientRect().height })');
-  check('wide layout dimensions', layout.name === 'wide' && layout.width === 430 && layout.height === 654, layout);
-  await evaluate('document.querySelector("#chatScaleBtn").click()');
-  await capture('compact');
-  layout = await evaluate('({ name: document.querySelector("#app").dataset.chatLayout, width: document.querySelector("#chatPanel").getBoundingClientRect().width, height: document.querySelector("#chatPanel").getBoundingClientRect().height })');
-  check('compact layout dimensions', layout.name === 'compact' && layout.width === 316 && layout.height === 500, layout);
-  await evaluate('document.querySelector("#chatScaleBtn").click()');
+  await evaluate('window.__qa.emit("chat")');
   await settle();
   await evaluate('document.querySelector("#chatInput").value = "陪我整理一个清晰的小计划吧。"; document.querySelector("#chatForm").requestSubmit()');
   await waitFor('window.__qa.snapshot().answerPending');

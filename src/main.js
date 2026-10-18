@@ -5,6 +5,7 @@ const {
   ipcMain,
   Menu,
   nativeImage,
+  powerMonitor,
   safeStorage,
   screen,
   shell,
@@ -16,6 +17,7 @@ const { createConversationStore, normalizeConversationDirectory } = require('./c
 const { extractResponseText } = require('./model-response');
 const { searchWeb } = require('./web-search');
 const { isTimeQuestion, isWeatherQuestion, requiresWebSearch } = require('./chat-intent');
+const { applyWindowLayer } = require('./window-layer');
 
 const PREVIEW_MODE = Boolean(process.env.QINGYU_SCREENSHOT_PATH);
 const MODEL = 'deepseek-flash';
@@ -49,7 +51,6 @@ const DEFAULT_SETTINGS = Object.freeze({
   quietStart: 23,
   quietEnd: 8,
   scale: 1,
-  chatLayout: 'standard',
   alwaysOnTop: true,
   launchAtLogin: false,
   petOpacity: 100,
@@ -209,6 +210,22 @@ function sendToRenderer(channel, payload) {
   }
 }
 
+function refreshWindowLayer({ raise = false } = {}) {
+  if (quitting) return;
+  applyWindowLayer(mainWindow, settings.alwaysOnTop, { raise });
+}
+
+function restoreVisibleWindowLayer() {
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized()) return;
+  refreshWindowLayer({ raise: true });
+}
+
+function showCompanion() {
+  if (quitting || !mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.showInactive();
+  refreshWindowLayer({ raise: true });
+}
+
 function createWindow() {
   const position = restoreWindowPosition();
   settings.windowPosition = position;
@@ -224,7 +241,7 @@ function createWindow() {
     hasShadow: false,
     show: false,
     skipTaskbar: true,
-    alwaysOnTop: settings.alwaysOnTop,
+    alwaysOnTop: false,
     backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -234,19 +251,20 @@ function createWindow() {
     },
   });
 
-  mainWindow.setAlwaysOnTop(settings.alwaysOnTop, 'floating');
+  refreshWindowLayer();
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  mainWindow.on('show', restoreVisibleWindowLayer);
+  mainWindow.on('restore', restoreVisibleWindowLayer);
   const screenshotPath = process.env.QINGYU_SCREENSHOT_PATH;
   mainWindow.loadFile(path.join(__dirname, 'index.html'), screenshotPath ? {
     query: {
       preview: '1',
-      layout: process.env.QINGYU_CHAT_LAYOUT || '',
       pose: process.env.QINGYU_PET_POSE || '',
     },
   } : undefined);
 
   mainWindow.once('ready-to-show', () => {
-    mainWindow.showInactive();
+    showCompanion();
     mainWindow.setIgnoreMouseEvents(true, { forward: true });
     if (screenshotPath) {
       setTimeout(() => {
@@ -294,16 +312,16 @@ function createTray() {
     {
       label: '打开聊天',
       click: () => {
-        mainWindow.showInactive();
+        showCompanion();
         sendToRenderer('open-chat');
       },
     },
-    { label: '查看天气', click: () => sendToRenderer('request-weather') },
-    { label: '设置', click: () => sendToRenderer('open-settings') },
+    { label: '查看天气', click: () => { showCompanion(); sendToRenderer('request-weather'); } },
+    { label: '设置', click: () => { showCompanion(); sendToRenderer('open-settings'); } },
     { type: 'separator' },
     {
       label: '显示 / 隐藏',
-      click: () => (mainWindow.isVisible() ? mainWindow.hide() : mainWindow.showInactive()),
+      click: () => (mainWindow.isVisible() ? mainWindow.hide() : showCompanion()),
     },
     { type: 'separator' },
     {
@@ -316,7 +334,7 @@ function createTray() {
   ]);
   tray.setContextMenu(contextMenu);
   tray.on('click', () => {
-    if (!mainWindow.isVisible()) mainWindow.showInactive();
+    showCompanion();
     sendToRenderer('open-chat');
   });
 }
@@ -324,7 +342,6 @@ function createTray() {
 function normalizeSettings(next = {}, base = settings) {
   const source = { ...base, ...next };
   const allowedEfforts = new Set(['none', 'low', 'medium', 'high']);
-  const allowedLayouts = new Set(['compact', 'standard', 'wide']);
   const bounded = (key, min, max) => {
     const value = Number(source[key]);
     return Math.min(max, Math.max(min, Number.isFinite(value) ? value : DEFAULT_SETTINGS[key]));
@@ -339,7 +356,6 @@ function normalizeSettings(next = {}, base = settings) {
     quietStart: Math.round(bounded('quietStart', 0, 23)),
     quietEnd: Math.round(bounded('quietEnd', 0, 23)),
     scale: bounded('scale', 0.78, 1.18),
-    chatLayout: allowedLayouts.has(source.chatLayout) ? source.chatLayout : 'standard',
     alwaysOnTop: boolean('alwaysOnTop'),
     launchAtLogin: boolean('launchAtLogin'),
     conversationDirectory: normalizeConversationDirectory(source.conversationDirectory),
@@ -586,7 +602,7 @@ function registerIpc() {
       settings = clean;
       conversationStore = nextStore;
       if (!PREVIEW_MODE) app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
-      mainWindow.setAlwaysOnTop(settings.alwaysOnTop, 'floating');
+      refreshWindowLayer({ raise: true });
       if (adjustedPosition) mainWindow.setPosition(adjustedPosition.x, adjustedPosition.y, false);
       chatHistory = [];
       return publicSettings();
@@ -598,13 +614,6 @@ function registerIpc() {
   ipcMain.handle('settings:clear-key', () => {
     clearApiKey();
     return true;
-  });
-
-  ipcMain.handle('ui:set-chat-layout', (_event, layout) => {
-    const allowedLayouts = new Set(['compact', 'standard', 'wide']);
-    settings.chatLayout = allowedLayouts.has(layout) ? layout : 'standard';
-    persistSettings();
-    return settings.chatLayout;
   });
 
   ipcMain.handle('weather:get', (_event, force) => getWeather(Boolean(force)));
@@ -662,9 +671,11 @@ app.whenReady().then(() => {
   });
   registerIpc();
   createWindow();
+  powerMonitor.on('resume', restoreVisibleWindowLayer);
+  powerMonitor.on('unlock-screen', restoreVisibleWindowLayer);
   if (!PREVIEW_MODE) createTray();
   app.on('activate', () => {
-    if (!mainWindow.isVisible()) mainWindow.showInactive();
+    showCompanion();
   });
 });
 

@@ -17,7 +17,6 @@ const els = {
   chatForm: document.querySelector('#chatForm'),
   chatInput: document.querySelector('#chatInput'),
   sendBtn: document.querySelector('#sendBtn'),
-  chatScaleBtn: document.querySelector('#chatScaleBtn'),
   settingsForm: document.querySelector('#settingsForm'),
   petNameInput: document.querySelector('#petNameInput'),
   cityInput: document.querySelector('#cityInput'),
@@ -47,7 +46,6 @@ let settings = {
   proactiveEnabled: true,
   voiceEnabled: false,
   scale: 1,
-  chatLayout: 'standard',
   ...Object.fromEntries(Object.entries(OPACITY_FIELDS).map(([name, [, value]]) => [name, value])),
 };
 let bubbleTimer;
@@ -62,8 +60,6 @@ let alphaCanvas;
 let alphaContext;
 
 const COMPANION_GREETING_INTERVAL_MS = 60 * 1000;
-const CHAT_LAYOUTS = ['compact', 'standard', 'wide'];
-const CHAT_LAYOUT_LABELS = { compact: '紧凑', standard: '标准', wide: '宽大' };
 const proactiveLines = [
   '老师，我在这里。',
   '老师，今天也一起加油吧。',
@@ -148,7 +144,6 @@ function updateMousePassThrough(event) {
 function applySettings(next) {
   settings = { ...settings, ...next };
   applyVisualSettings(settings);
-  applyChatLayout(settings.chatLayout);
   syncPetName(settings.petName);
 }
 
@@ -167,28 +162,6 @@ function previewVisualSettings() {
     document.querySelector(`#${name}Value`).textContent = `${values[name]}%`;
   }
   applyVisualSettings(values);
-}
-
-function applyChatLayout(layout) {
-  const safeLayout = CHAT_LAYOUTS.includes(layout) ? layout : 'standard';
-  settings.chatLayout = safeLayout;
-  document.querySelector('#app').dataset.chatLayout = safeLayout;
-  const nextLayout = CHAT_LAYOUTS[(CHAT_LAYOUTS.indexOf(safeLayout) + 1) % CHAT_LAYOUTS.length];
-  els.chatScaleBtn.title = `当前：${CHAT_LAYOUT_LABELS[safeLayout]}；点击切换为${CHAT_LAYOUT_LABELS[nextLayout]}`;
-  els.chatScaleBtn.setAttribute('aria-label', els.chatScaleBtn.title);
-}
-
-async function cycleChatLayout() {
-  const currentIndex = CHAT_LAYOUTS.indexOf(settings.chatLayout);
-  const nextLayout = CHAT_LAYOUTS[(currentIndex + 1) % CHAT_LAYOUTS.length];
-  applyChatLayout(nextLayout);
-  try {
-    const savedLayout = await api.setChatLayout(nextLayout);
-    applyChatLayout(savedLayout);
-    showBubble(`对话框已切换为${CHAT_LAYOUT_LABELS[savedLayout]}布局。`, { duration: 3600 });
-  } catch {
-    showBubble('对话框大小暂时无法保存。', { duration: 4200 });
-  }
 }
 
 function syncPetName(name) {
@@ -449,7 +422,6 @@ async function saveSettings(event) {
     apiKey: els.apiKeyInput.value,
     reasoningEffort: els.reasoningInput.value,
     scale: Number(els.scaleInput.value),
-    chatLayout: settings.chatLayout || 'standard',
     proactiveEnabled: els.proactiveInput.checked,
     voiceEnabled: els.voiceInput.checked,
     alwaysOnTop: els.alwaysOnTopInput.checked,
@@ -539,7 +511,6 @@ function wireEvents() {
     els.messages.replaceChildren();
     addMessage('assistant', randomInitialGreeting());
   });
-  els.chatScaleBtn.addEventListener('click', cycleChatLayout);
 
   els.chatForm.addEventListener('submit', (event) => { event.preventDefault(); sendChat(els.chatInput.value); });
   els.chatInput.addEventListener('keydown', (event) => {
@@ -595,8 +566,6 @@ async function init() {
   } catch {
     // Keep local defaults so the character can still render.
   }
-  const previewLayout = queryParams.get('layout');
-  if (CHAT_LAYOUTS.includes(previewLayout)) applyChatLayout(previewLayout);
   if (queryParams.get('pose') === 'happy') holdHappyPose(true);
   const greeting = randomInitialGreeting();
   addMessage('assistant', greeting);

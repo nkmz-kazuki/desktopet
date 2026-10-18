@@ -34,7 +34,7 @@ test('all six opacity controls preview immediately, close rolls them back, and s
     assert.equal(payload[name], amount);
     assert.equal(harness.css(opacityVariables[name]), String(amount / 100));
   }
-  for (const oldField of ['model', 'reminderMinutes', 'encryptionAvailable']) assert.equal(oldField in payload, false);
+  for (const oldField of ['model', 'reminderMinutes', 'encryptionAvailable', 'chatLayout']) assert.equal(oldField in payload, false);
   assert.equal(harness.get('settingsPanel').classList.contains('open'), false);
   await harness.openSettings();
   assert.equal(harness.get('petOpacityInput').value, '0');
@@ -78,18 +78,18 @@ test('directory choice fills the editable address and saves only when requested;
   assert.equal(canceled.calls.saveSettings[0].conversationDirectory, pasted);
 });
 
-test('current HTML provides every referenced element without removed greeting or model controls', async () => {
+test('current HTML provides every referenced element without removed greeting, model or chat size controls', async () => {
   const harness = await rendererHarness();
   await harness.openSettings();
   await harness.get('settingsForm').dispatch('submit');
   await harness.openChat();
-  await harness.get('chatScaleBtn').dispatch('click');
   await harness.get('clearChatBtn').dispatch('click');
   assert.deepEqual(harness.missingSelectors, []);
-  for (const selector of ['#reminderInput', '#reminderMinutesInput', '#modelInput', '#settingsNote', '#privacyNote']) {
+  for (const selector of ['#reminderInput', '#reminderMinutesInput', '#modelInput', '#settingsNote', '#privacyNote', '#chatScaleBtn']) {
     assert.equal(harness.queriedSelectors.includes(selector), false);
     assert.equal(harness.html.includes(`id="${selector.slice(1)}"`), false);
   }
+  assert.equal(harness.html.includes('随时听你说'), false);
 });
 
 test('scheduled greetings wait one minute and cycle through 23 distinct messages in order', async () => {

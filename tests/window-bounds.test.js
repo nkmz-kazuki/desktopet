@@ -4,13 +4,9 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { mainHarness } = require('./main-harness');
 
-const layouts = [
-  { left: 16, top: 29, width: 374, height: 654 },
-  { left: 38, top: 146, width: 316, height: 500 },
-  { left: 8, top: 29, width: 430, height: 654 },
-];
+const panel = { left: 16, top: 29, width: 374, height: 654 };
 
-test('all chat layouts stay inside the work area at each drag boundary on primary and offset monitors', async (t) => {
+test('the fixed chat panel stays inside the work area at each drag boundary on primary and offset monitors', async (t) => {
   const { constrain } = await mainHarness(t);
   for (const workArea of [
     { x: 0, y: 0, width: 1920, height: 1080 },
@@ -19,12 +15,10 @@ test('all chat layouts stay inside the work area at each drag boundary on primar
     for (const scale of [0.78, 1, 1.18]) {
       for (const position of [{ x: -100000, y: -100000 }, { x: 100000, y: 100000 }]) {
         const next = constrain(position, { workArea }, scale);
-        for (const panel of layouts) {
-          assert.ok(next.x + panel.left >= workArea.x, 'panel left must remain visible');
-          assert.ok(next.x + panel.left + panel.width <= workArea.x + workArea.width, 'panel right must remain visible');
-          assert.ok(next.y + panel.top >= workArea.y, 'panel top must remain visible');
-          assert.ok(next.y + panel.top + panel.height <= workArea.y + workArea.height, 'panel bottom must remain visible');
-        }
+        assert.ok(next.x + panel.left >= workArea.x, 'panel left must remain visible');
+        assert.ok(next.x + panel.left + panel.width <= workArea.x + workArea.width, 'panel right must remain visible');
+        assert.ok(next.y + panel.top >= workArea.y, 'panel top must remain visible');
+        assert.ok(next.y + panel.top + panel.height <= workArea.y + workArea.height, 'panel bottom must remain visible');
       }
     }
   }

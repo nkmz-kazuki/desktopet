@@ -13,7 +13,6 @@ contextBridge.exposeInMainWorld('petAPI', {
   getWeather: (force = false) => ipcRenderer.invoke('weather:get', force),
   sendChat: (message) => ipcRenderer.invoke('chat:send', message),
   clearChat: () => ipcRenderer.invoke('chat:clear'),
-  setChatLayout: (layout) => ipcRenderer.invoke('ui:set-chat-layout', layout),
   setIgnoreMouse: (ignore) => ipcRenderer.send('window:set-ignore-mouse', ignore),
   moveBy: (x, y) => ipcRenderer.send('window:move-by', { x, y }),
   openApiKeys: () => ipcRenderer.invoke('external:open-api-keys'),
