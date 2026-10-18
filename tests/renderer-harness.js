@@ -170,6 +170,9 @@ async function rendererHarness(options = {}) {
     setInterval: (callback, delay) => schedule(callback, delay, delay),
     clearInterval: (id) => timers.delete(id),
   });
+  const intentSource = await fs.readFile(path.join(__dirname, '..', 'src', 'chat-intent.js'), 'utf8');
+  vm.runInContext(intentSource, context, { filename: 'chat-intent.js' });
+  window.chatIntent = context.chatIntent;
   const source = await fs.readFile(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8');
   vm.runInContext(source, context, { filename: 'renderer.js' });
   await flush();

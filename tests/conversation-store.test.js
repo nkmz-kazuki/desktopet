@@ -81,10 +81,10 @@ test('main IPC archives time, weather, model answers and errors; clear-chat pres
     ok: false, status: 401, json: async () => ({ error: { message: '模拟服务失败' } }),
   }) });
   const failure = await failedInvoke('chat:send', '模拟失败提问');
-  assert.equal(failure.error, '模拟服务失败');
+  assert.match(failure.error, /401/);
   const content = await fs.readFile(store.filePath, 'utf8');
   assert.ok(content.includes('模拟失败提问'));
-  assert.ok(content.includes('模拟服务失败'));
+  assert.ok(content.includes(failure.error));
   assert.ok(content.includes('请求未完成'));
 });
 

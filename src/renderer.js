@@ -361,11 +361,11 @@ async function showWeather(force = false, addToChat = false) {
 }
 
 function isWeatherQuestion(message) {
-  return /天气|气温|温度|下雨|带伞/.test(message);
+  return window.chatIntent.isWeatherQuestion(message, settings.city);
 }
 
 function isTimeQuestion(message) {
-  return /几点|时间|日期|星期|几号/.test(message);
+  return window.chatIntent.isTimeQuestion(message);
 }
 
 async function sendChat(message) {

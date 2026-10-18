@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const storeModule = require('../src/conversation-store');
 
 async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirectory,
+  apiKey = 'local-test-only',
   displays = [{ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }],
   windowBounds = { x: 900, y: 200, width: 780, height: 720 },
   cursorPoint = { x: 1000, y: 600 },
@@ -70,14 +71,15 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
   };
   const context = vm.createContext({
     require: (name) => name === 'electron' ? electron : name === './conversation-store'
-      ? { ...storeModule, createConversationStore: store ? () => store : storeModule.createConversationStore } : require(name),
+      ? { ...storeModule, createConversationStore: store ? () => store : storeModule.createConversationStore }
+      : require(name.startsWith('./') ? path.join(__dirname, '..', 'src', name) : name),
     __dirname: path.join(__dirname, '..', 'src'),
     process: { ...process, env: { ...process.env, QINGYU_SCREENSHOT_PATH: '' } },
     console, fetch: fetchImpl, AbortSignal, setTimeout, clearTimeout,
-    testWindow,
+    testWindow, testApiKey: apiKey,
   });
   const source = await fs.readFile(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
-  vm.runInContext(source + '\nloadSettings(); sessionApiKey = "local-test-only"; mainWindow = testWindow; registerIpc();', context);
+  vm.runInContext(source + '\nloadSettings(); sessionApiKey = testApiKey; mainWindow = testWindow; registerIpc();', context);
   return {
     invoke: (channel, value) => handlers.get(channel)({}, value),
     emit: (channel, value) => eventHandlers.get(channel)({}, value),

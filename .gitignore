@@ -24,6 +24,7 @@ deepseek-key.bin
 /screenshots/
 /preview*.png
 /final-*.png
+/work/deepseek/
 
 .DS_Store
 Thumbs.db
