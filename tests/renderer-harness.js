@@ -19,10 +19,10 @@ async function rendererHarness(options = {}) {
   const elements = [];
   const ids = new Map();
   const bridgeEvents = new Map();
-  const calls = { saveSettings: [], sendChat: [], moveBy: [], setIgnoreMouse: [], chooseDirectory: 0 };
+  const calls = { saveSettings: [], sendChat: [], moveBy: [], setIgnoreMouse: [], previewScale: [], spoken: [], chooseDirectory: 0 };
   const opacityDefaults = { petOpacity: 100, chatOpacity: 80, messageOpacity: 88, inputOpacity: 92, textOpacity: 100, bubbleOpacity: 50 };
   let saved = {
-    petName: '鲸鱼娘', city: '上海', reasoningEffort: 'medium', scale: 1,
+    petName: '鲸鱼娘', city: '上海', modelId: 'deepseek-flash', reasoningEffort: 'max', scale: 1,
     proactiveEnabled: true, voiceEnabled: false,
     quietStart: 23, quietEnd: 8, alwaysOnTop: true, launchAtLogin: false,
     conversationDirectory: path.resolve('example-conversations'), ...opacityDefaults, ...options.settings,
@@ -45,11 +45,19 @@ async function rendererHarness(options = {}) {
       this.checked = false;
       this.disabled = false;
       this.complete = false;
+      this.hidden = 'hidden' in attrs;
+      this.scrollTop = 0;
       this.scrollHeight = 100;
       this.offsetWidth = 400;
+      this.offsetHeight = 32;
+      this.offsetTop = 0;
+      this.clientHeight = 180;
+      this.clientLeft = 1;
+      this.clientTop = 1;
       this._text = '';
       this._className = attrs.class || '';
       this.id = attrs.id || '';
+      if (this.id === 'settingsPanel') { this.offsetWidth = 374; this.offsetHeight = 654; }
       if (this.id) ids.set(this.id, this);
       for (const [key, value] of Object.entries(attrs)) {
         if (key.startsWith('data-')) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
@@ -70,6 +78,8 @@ async function rendererHarness(options = {}) {
     }
     get className() { return this._className; }
     set className(value) { this._className = value; }
+    get id() { return this._id; }
+    set id(value) { this._id = value; if (value) ids.set(value, this); }
     get textContent() { return this._text; }
     set textContent(value) {
       this._text = String(value);
@@ -80,24 +90,40 @@ async function rendererHarness(options = {}) {
       this.listeners.get(name).push(listener);
     }
     async dispatch(name, details = {}) {
-      const event = { target: this, preventDefault() {}, ...details };
+      const event = { type: name, target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...details };
       await Promise.all((this.listeners.get(name) || []).map((listener) => listener(event)));
       await flush();
       return event;
+    }
+    dispatchEvent(event) {
+      event.target ??= this;
+      for (const listener of this.listeners.get(event.type) || []) listener(event);
+      return !event.defaultPrevented;
     }
     appendChild(child) { child.parentElement = this; this.children.push(child); return child; }
     remove() {
       this.removed = true;
       if (this.parentElement) this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
     }
-    replaceChildren() { for (const child of this.children) child.remove(); this.children = []; }
+    replaceChildren(...children) { for (const child of [...this.children]) child.remove(); this.children = []; children.forEach((child) => this.appendChild(child)); }
     setAttribute(name, value) { this.attrs[name] = String(value); }
     getAttribute(name) { return this.attrs[name]; }
-    focus() { this.focused = true; }
-    blur() { this.focused = false; }
+    removeAttribute(name) { delete this.attrs[name]; }
+    focus() { if (document.activeElement) document.activeElement.focused = false; this.focused = true; document.activeElement = this; }
+    blur() { this.focused = false; if (document.activeElement === this) document.activeElement = null; }
+    contains(node) { return this === node || this.children.some((child) => child.contains(node)); }
     setPointerCapture() {}
     releasePointerCapture() {}
-    getBoundingClientRect() { return { left: 0, top: 0, right: 400, bottom: 660, width: 400, height: 660 }; }
+    getBoundingClientRect() {
+      const presets = {
+        settingsPanel: { left: 16, top: 29, width: 374, height: 654 },
+        settingsContent: { left: 17, top: 104, width: 372, height: 503 },
+        settingsActions: { left: 17, top: 607, width: 372, height: 75 },
+        modelInputTrigger: { left: 37, top: 300, width: 320, height: 35 },
+      };
+      const rect = this.rect || presets[this.id] || { left: 0, top: 0, width: 400, height: 660 };
+      return { ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height };
+    }
     closest(selector) {
       for (const alternative of selector.split(',')) {
         const classes = alternative.trim().split('.').filter(Boolean);
@@ -109,10 +135,18 @@ async function rendererHarness(options = {}) {
   }
 
   const html = await fs.readFile(path.join(__dirname, '..', 'src', 'index.html'), 'utf8');
-  for (const match of html.matchAll(/<([a-z][\w-]*)\b([^>]*)>/gi)) {
+  const stack = [];
+  const voidTags = new Set(['meta', 'link', 'input', 'img', 'br', 'hr']);
+  for (const match of html.matchAll(/<\/?([a-z][\w-]*)\b([^>]*)>/gi)) {
+    if (match[0].startsWith('</')) {
+      while (stack.length) if (stack.pop().tagName === match[1].toUpperCase()) break;
+      continue;
+    }
     const attrs = {};
     for (const attr of match[2].matchAll(/([\w-]+)(?:="([^"]*)")?/g)) attrs[attr[1]] = attr[2] ?? '';
-    new Element(match[1], attrs);
+    const element = new Element(match[1], attrs);
+    stack.at(-1)?.appendChild(element);
+    if (!voidTags.has(match[1].toLowerCase()) && !match[0].endsWith('/>')) stack.push(element);
   }
   const document = new Element('document');
   document.body = elements.find((element) => element.tagName === 'BODY');
@@ -134,6 +168,8 @@ async function rendererHarness(options = {}) {
   document.elementFromPoint = () => ids.get('petVisual');
   const api = {
     getSettings: async () => ({ ...saved }),
+    getDesktopLayout: async () => options.desktopLayout ?? null,
+    previewScale: (value) => calls.previewScale.push(value),
     saveSettings: async (next) => {
       calls.saveSettings.push({ ...next });
       if (options.saveError) throw new Error(options.saveError);
@@ -144,26 +180,55 @@ async function rendererHarness(options = {}) {
       calls.sendChat.push(text);
       return options.sendChat ? options.sendChat(text) : { text: '已回答。', kind: 'model' };
     },
-    chooseConversationDirectory: async () => { calls.chooseDirectory += 1; return options.selectedDirectory ?? null; },
+    getWeather: async () => {
+      if (options.weatherError) throw new Error(options.weatherError);
+      return { city: '上海', region: '上海', condition: '晴', temperature: 21, feelsLike: 20, low: 16, high: 24, rainChance: 10 };
+    },
+    chooseConversationDirectory: async () => {
+      calls.chooseDirectory += 1;
+      if (options.chooseDirectoryError) throw new Error(options.chooseDirectoryError);
+      return options.selectedDirectory ?? null;
+    },
     setIgnoreMouse: (value) => calls.setIgnoreMouse.push(value),
     moveBy: (...values) => calls.moveBy.push(values),
     clearChat: async () => true,
-    clearApiKey: async () => true,
-    openApiKeys: async () => true,
-    openConversationFolder: async () => true,
+    clearApiKey: async () => {
+      if (options.clearKeyError) throw new Error(options.clearKeyError);
+      saved.apiKeySet = false;
+      return true;
+    },
+    openApiKeys: async () => {
+      if (options.openApiKeysError) throw new Error(options.openApiKeysError);
+      return true;
+    },
+    openConversationFolder: async () => {
+      if (options.openFolderError) throw new Error(options.openFolderError);
+      return true;
+    },
     hide() {}, quit() {},
   };
-  for (const name of ['onOpenChat', 'onOpenSettings', 'onOpenContextPreview', 'onRequestWeather']) {
+  for (const name of ['onOpenChat', 'onOpenSettings', 'onOpenContextPreview', 'onRequestWeather', 'onDesktopLayout']) {
     api[name] = (handler) => bridgeEvents.set(name, handler);
   }
   const window = new Element('window');
-  Object.assign(window, { petAPI: api, location: { search: '' }, innerWidth: 780, innerHeight: 720 });
+  Object.assign(window, {
+    petAPI: api, location: { search: '' }, innerWidth: 780, innerHeight: 720,
+    speechSynthesis: { cancel() {}, speak: (utterance) => calls.spoken.push(utterance.text) },
+  });
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
   }
+  class RendererEvent {
+    constructor(type, details = {}) { this.type = type; Object.assign(this, details); this.defaultPrevented = false; }
+    preventDefault() { this.defaultPrevented = true; }
+  }
+  class SpeechUtterance {
+    constructor(text) { this.text = text; }
+  }
   const context = vm.createContext({
-    window, document, Date: ClockDate, console, URLSearchParams,
+    window, document, Date: ClockDate, console, URLSearchParams, Event: RendererEvent, SpeechSynthesisUtterance: SpeechUtterance,
+    Math: options.random == null ? Math : Object.assign(Object.create(Math), { random: () => options.random }),
     setTimeout: (callback, delay) => schedule(callback, delay),
     clearTimeout: (id) => timers.delete(id),
     setInterval: (callback, delay) => schedule(callback, delay, delay),
@@ -172,7 +237,14 @@ async function rendererHarness(options = {}) {
   const intentSource = await fs.readFile(path.join(__dirname, '..', 'src', 'chat-intent.js'), 'utf8');
   vm.runInContext(intentSource, context, { filename: 'chat-intent.js' });
   window.chatIntent = context.chatIntent;
-  const source = await fs.readFile(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+  for (const filename of ['model-config.js', 'custom-select.js']) {
+    vm.runInContext(await fs.readFile(path.join(__dirname, '..', 'src', filename), 'utf8'), context, { filename });
+  }
+  window.customSelect = context.customSelect;
+  let source = await fs.readFile(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+  if (options.floatingBubbleEnabled) {
+    source = source.replace('const FLOATING_BUBBLE_ENABLED = false;', 'const FLOATING_BUBBLE_ENABLED = true;');
+  }
   vm.runInContext(source, context, { filename: 'renderer.js' });
   await flush();
   return {
@@ -180,9 +252,15 @@ async function rendererHarness(options = {}) {
     css: (name) => document.documentElement.style.getPropertyValue(name),
     get saved() { return saved; },
     get now() { return now; },
+    get pendingTimers() { return [...timers.values()].map(({ at, interval }) => ({ at, interval })); },
     calls, bubbleChanges, queriedSelectors, missingSelectors, html,
+    get activeElement() { return document.activeElement; },
+    pointerDown: async (target) => document.dispatch('pointerdown', { target }),
+    windowEvent: async (name) => window.dispatch(name),
     openSettings: async () => { await bridgeEvents.get('onOpenSettings')(); await flush(); },
     openChat: async () => { await bridgeEvents.get('onOpenChat')(); await flush(); },
+    requestWeather: async () => { await bridgeEvents.get('onRequestWeather')(); await flush(); },
+    emitDesktopLayout: async (value) => { await bridgeEvents.get('onDesktopLayout')(value); await flush(); },
     flush,
     async advance(milliseconds) {
       const end = now + milliseconds;

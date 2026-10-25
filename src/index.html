@@ -26,7 +26,7 @@
         <div id="messages" class="messages" aria-live="polite"></div>
 
         <form id="chatForm" class="composer">
-          <textarea id="chatInput" rows="1" maxlength="8000" placeholder="发消息给 鲸鱼娘…" data-pet-name-placeholder="发消息给 {name}…" aria-label="聊天消息"></textarea>
+          <textarea id="chatInput" rows="1" maxlength="8000" placeholder="想问鲸鱼娘点什么..." data-pet-name-placeholder="想问{name}点什么..." aria-label="聊天消息"></textarea>
           <button id="sendBtn" type="submit" aria-label="发送消息">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.3 3.7 21 11.2a.9.9 0 0 1 0 1.6L4.3 20.3a.9.9 0 0 1-1.2-1.1l1.7-5.6 8.2-1.6-8.2-1.6-1.7-5.6a.9.9 0 0 1 1.2-1.1Z"/></svg>
           </button>
@@ -40,7 +40,7 @@
         </header>
 
         <form id="settingsForm">
-          <div class="settings-content">
+          <div id="settingsContent" class="settings-content">
           <div class="field-row two-cols">
             <label>昵称<input id="petNameInput" name="petName" maxlength="16" /></label>
             <label>天气城市<input id="cityInput" name="city" maxlength="64" /></label>
@@ -51,18 +51,13 @@
               <button id="apiKeyHelpBtn" type="button" class="text-button">获取</button>
             </div>
           </label>
-          <div class="field-row two-cols">
-            <label>思考强度
-              <select id="reasoningInput" name="reasoningEffort">
-                <option value="none">无</option>
-                <option value="low">低</option>
-                <option value="medium">中</option>
-                <option value="high">高</option>
-              </select>
-            </label>
-            <label>人物大小
-              <input id="scaleInput" name="scale" type="range" min="0.78" max="1.18" step="0.02" />
-            </label>
+          <div class="select-field">
+            <label id="modelInputLabel" for="modelInputTrigger">模型类别</label>
+            <select id="modelInput" name="modelId" class="select-source" hidden tabindex="-1" aria-hidden="true"></select>
+            <button id="modelInputTrigger" type="button" class="select-trigger" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="modelInputListbox" aria-labelledby="modelInputLabel modelInputValue">
+              <span id="modelInputValue" class="select-value"></span>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+            </button>
           </div>
           <fieldset class="opacity-settings">
             <legend>不透明度</legend>
@@ -72,12 +67,12 @@
               <label for="messageOpacityInput"><span>消息气泡<output id="messageOpacityValue" for="messageOpacityInput">88%</output></span><input id="messageOpacityInput" name="messageOpacity" type="range" min="0" max="100" step="1" value="88" /></label>
               <label for="inputOpacityInput"><span>输入框<output id="inputOpacityValue" for="inputOpacityInput">92%</output></span><input id="inputOpacityInput" name="inputOpacity" type="range" min="0" max="100" step="1" value="92" /></label>
               <label for="textOpacityInput"><span>文字<output id="textOpacityValue" for="textOpacityInput">100%</output></span><input id="textOpacityInput" name="textOpacity" type="range" min="0" max="100" step="1" value="100" /></label>
-              <label for="bubbleOpacityInput"><span>问候气泡<output id="bubbleOpacityValue" for="bubbleOpacityInput">50%</output></span><input id="bubbleOpacityInput" name="bubbleOpacity" type="range" min="0" max="100" step="1" value="50" /></label>
+              <label for="bubbleOpacityInput" data-floating-bubble-setting hidden><span>问候气泡<output id="bubbleOpacityValue" for="bubbleOpacityInput">50%</output></span><input id="bubbleOpacityInput" name="bubbleOpacity" type="range" min="0" max="100" step="1" value="50" /></label>
             </div>
           </fieldset>
           <div class="toggle-grid">
-            <label class="toggle"><input id="proactiveInput" type="checkbox" /><span></span>主动陪伴</label>
-            <label class="toggle"><input id="voiceInput" type="checkbox" /><span></span>朗读气泡</label>
+            <label class="toggle" data-floating-bubble-setting hidden><input id="proactiveInput" type="checkbox" /><span></span>主动陪伴</label>
+            <label class="toggle" data-floating-bubble-setting hidden><input id="voiceInput" type="checkbox" /><span></span>朗读气泡</label>
             <label class="toggle"><input id="alwaysOnTopInput" type="checkbox" /><span></span>始终置顶</label>
             <label class="toggle"><input id="launchInput" type="checkbox" /><span></span>开机启动</label>
           </div>
@@ -90,7 +85,8 @@
             </div>
           </div>
           </div>
-          <div class="settings-actions">
+          <p id="settingsFeedback" class="settings-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+          <div id="settingsActions" class="settings-actions">
             <button id="clearKeyBtn" type="button" class="danger-link">清除 Key</button>
             <button type="submit" class="primary-button">保存设置</button>
           </div>
@@ -98,9 +94,8 @@
       </section>
 
       <section id="petStage" class="pet-stage" aria-label="桌宠人物">
-        <div id="speechBubble" class="speech-bubble" role="status">
-          <span id="bubbleEyebrow" data-pet-name>鲸鱼娘</span>
-          <p id="bubbleText">Hi，我是鲸鱼娘，今天从哪里开始？</p>
+        <div id="speechBubble" class="speech-bubble" role="status" hidden>
+          <p id="bubbleText">今天从哪里开始？</p>
         </div>
 
         <div id="sparkles" class="sparkles" aria-hidden="true"></div>
@@ -140,6 +135,8 @@
       </nav>
     </main>
     <script src="chat-intent.js"></script>
+    <script src="model-config.js"></script>
+    <script src="custom-select.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>

@@ -13,7 +13,8 @@ test('migrates only settings and encrypted key, preserving customized preference
   const settings = await invoke('settings:get');
   assert.equal(settings.petName, '自定义昵称');
   assert.equal(settings.city, '北京');
-  assert.equal(settings.reasoningEffort, 'high');
+  assert.equal(settings.reasoningEffort, 'max');
+  assert.equal(settings.modelId, 'deepseek-flash');
   assert.equal('chatLayout' in settings, false);
   assert.equal(settings.chatOpacity, 80);
   assert.equal(settings.petOpacity, 100);
@@ -32,7 +33,62 @@ test('renames the previous built-in nickname and never replaces existing new-ver
   assert.equal(settings.city, '杭州');
 });
 
-test('removes an obsolete chat layout from existing settings without changing character scale or position', async (t) => {
+test('default model preferences use Flash and max reasoning, migrating old levels without reviving obsolete model settings', async (t) => {
+  const initial = await mainHarness(t);
+  const defaults = await initial.invoke('settings:get');
+  assert.equal(defaults.modelId, 'deepseek-flash');
+  assert.equal(defaults.reasoningEffort, 'max');
+  const legacy = await mainHarness(t, { saved: { model: 'deepseek-v4-pro', reasoningEffort: 'medium' } });
+  const migrated = await legacy.invoke('settings:get');
+  assert.equal(migrated.modelId, 'deepseek-flash');
+  assert.equal(migrated.reasoningEffort, 'max');
+  const persisted = JSON.parse(await fs.readFile(path.join(legacy.appPaths.userData, 'settings.json'), 'utf8'));
+  assert.equal(persisted.modelId, 'deepseek-flash');
+  assert.equal(persisted.reasoningEffort, 'max');
+  assert.equal('model' in persisted, false);
+});
+
+test('model selection and forced max reasoning save and reload while preserving appearance and identity', async (t) => {
+  const { invoke, appPaths } = await mainHarness(t, { saved: {
+    petName: '自定义昵称', city: '杭州', scale: 0.88, chatOpacity: 61,
+  } });
+  const saved = await invoke('settings:save', { modelId: 'deepseek-v4-pro', reasoningEffort: 'max' });
+  assert.equal(saved.modelId, 'deepseek-v4-pro');
+  assert.equal(saved.reasoningEffort, 'max');
+  const persisted = JSON.parse(await fs.readFile(path.join(appPaths.userData, 'settings.json'), 'utf8'));
+  const reloaded = await mainHarness(t, { saved: persisted });
+  const next = await reloaded.invoke('settings:get');
+  assert.equal(next.modelId, 'deepseek-v4-pro');
+  assert.equal(next.reasoningEffort, 'max');
+  assert.equal(next.petName, '自定义昵称');
+  assert.equal(next.city, '杭州');
+  assert.equal(next.scale, 0.88);
+  assert.equal(next.chatOpacity, 61);
+  for (const reasoningEffort of ['none', 'low', 'medium', 'high', 'max']) {
+    const result = await invoke('settings:save', { reasoningEffort });
+    assert.equal(result.modelId, 'deepseek-v4-pro');
+    assert.equal(result.reasoningEffort, 'max');
+  }
+});
+
+test('invalid model preferences fall back safely on both load and save', async (t) => {
+  const { invoke, appPaths } = await mainHarness(t, { saved: {
+    modelId: 'deepseek-v4-flash', reasoningEffort: 'unsupported',
+  } });
+  const loaded = await invoke('settings:get');
+  assert.equal(loaded.modelId, 'deepseek-flash');
+  assert.equal(loaded.reasoningEffort, 'max');
+  await invoke('settings:save', { modelId: 'deepseek-v4-pro', reasoningEffort: 'none' });
+  const invalid = await invoke('settings:save', { modelId: '__proto__', reasoningEffort: null, model: 'deepseek-v4-pro' });
+  assert.equal(invalid.modelId, 'deepseek-flash');
+  assert.equal(invalid.reasoningEffort, 'max');
+  const persisted = JSON.parse(await fs.readFile(path.join(appPaths.userData, 'settings.json'), 'utf8'));
+  assert.equal(persisted.modelId, 'deepseek-flash');
+  assert.equal(persisted.reasoningEffort, 'max');
+  assert.equal('model' in persisted, false);
+});
+
+test('removes an obsolete chat layout while preserving character scale and migrating its screen anchor', async (t) => {
   const { invoke, appPaths } = await mainHarness(t, { saved: {
     chatLayout: 'wide', scale: 0.88, windowPosition: { x: 820, y: 230 },
   } });
@@ -48,7 +104,8 @@ test('removes an obsolete chat layout from existing settings without changing ch
   const persisted = JSON.parse(await fs.readFile(path.join(appPaths.userData, 'settings.json'), 'utf8'));
   assert.equal('chatLayout' in persisted, false);
   assert.equal(persisted.scale, 0.88);
-  assert.deepEqual(persisted.windowPosition, { x: 820, y: 230 });
+  assert.deepEqual(persisted.petPosition, { x: 820 + 597.65, y: 230 + 724 });
+  assert.deepEqual(persisted.windowPosition, { x: next.windowPosition.x, y: next.windowPosition.y });
 });
 
 test('saves quoted absolute directories and bounded opacities without moving or overwriting previous conversation history', async (t) => {
@@ -85,9 +142,14 @@ test('rejects invalid or unwritable folders before applying any setting and perm
   const blockingFile = path.join(directory, 'not-a-directory');
   await fs.writeFile(blockingFile, 'keep this file');
   for (const conversationDirectory of ['relative/path', blockingFile]) {
-    await assert.rejects(invoke('settings:save', { conversationDirectory, petName: 'should-not-apply', chatOpacity: 22 }));
+    await assert.rejects(invoke('settings:save', {
+      conversationDirectory, petName: 'should-not-apply', chatOpacity: 22,
+      modelId: 'deepseek-v4-pro', reasoningEffort: 'max',
+    }));
     assert.equal(await fs.readFile(path.join(appPaths.userData, 'settings.json'), 'utf8'), initial);
     assert.equal((await invoke('settings:get')).petName, '鲸鱼娘');
+    assert.equal((await invoke('settings:get')).modelId, 'deepseek-flash');
+    assert.equal((await invoke('settings:get')).reasoningEffort, 'max');
     assert.equal(harness.loginUpdates, 0);
   }
   assert.equal(await fs.readFile(blockingFile, 'utf8'), 'keep this file');

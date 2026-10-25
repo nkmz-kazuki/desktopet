@@ -1,4 +1,6 @@
 const api = window.petAPI;
+const modelConfig = window.modelConfig;
+const FLOATING_BUBBLE_ENABLED = false;
 const queryParams = new URLSearchParams(window.location.search);
 if (queryParams.has('preview')) document.body.classList.add('preview');
 
@@ -10,7 +12,6 @@ const els = {
   petImage: document.querySelector('#petImage'),
   petHappyImage: document.querySelector('#petHappyImage'),
   speechBubble: document.querySelector('#speechBubble'),
-  bubbleEyebrow: document.querySelector('#bubbleEyebrow'),
   bubbleText: document.querySelector('#bubbleText'),
   sparkles: document.querySelector('#sparkles'),
   messages: document.querySelector('#messages'),
@@ -18,11 +19,11 @@ const els = {
   chatInput: document.querySelector('#chatInput'),
   sendBtn: document.querySelector('#sendBtn'),
   settingsForm: document.querySelector('#settingsForm'),
+  settingsFeedback: document.querySelector('#settingsFeedback'),
   petNameInput: document.querySelector('#petNameInput'),
   cityInput: document.querySelector('#cityInput'),
   apiKeyInput: document.querySelector('#apiKeyInput'),
-  reasoningInput: document.querySelector('#reasoningInput'),
-  scaleInput: document.querySelector('#scaleInput'),
+  modelInput: document.querySelector('#modelInput'),
   proactiveInput: document.querySelector('#proactiveInput'),
   voiceInput: document.querySelector('#voiceInput'),
   alwaysOnTopInput: document.querySelector('#alwaysOnTopInput'),
@@ -42,7 +43,7 @@ const OPACITY_FIELDS = {
 let settings = {
   petName: '鲸鱼娘',
   city: '上海',
-  reasoningEffort: 'medium',
+  modelId: modelConfig.DEFAULT_MODEL,
   proactiveEnabled: true,
   voiceEnabled: false,
   scale: 1,
@@ -58,6 +59,9 @@ let ignoringMouse = true;
 let dragState = null;
 let alphaCanvas;
 let alphaContext;
+let settingsSelects = [];
+let desktopLayout = null;
+let lastRequestedScale = null;
 
 const COMPANION_GREETING_INTERVAL_MS = 60 * 1000;
 const proactiveLines = [
@@ -91,6 +95,13 @@ const initialGreetings = [
   '嗨，我是 {name}。今天想先做哪件事？',
   'Hi，我是 {name}，现在想聊些什么？',
   '见到你啦，今天想从哪里开始？',
+];
+
+const speechInitialGreetings = [
+  '今天从哪里开始？',
+  '今天想先做哪件事？',
+  '现在想聊些什么？',
+  '今天也一起慢慢来吧。',
 ];
 
 function randomInitialGreeting() {
@@ -143,12 +154,20 @@ function updateMousePassThrough(event) {
 
 function applySettings(next) {
   settings = { ...settings, ...next };
+  settings.modelId = modelConfig.normalizeModelId(settings.modelId);
   applyVisualSettings(settings);
   syncPetName(settings.petName);
 }
 
 function applyVisualSettings(values) {
-  document.documentElement.style.setProperty('--pet-scale', String(values.scale || 1));
+  const requestedScale = Number(values.scale || 1);
+  document.documentElement.style.setProperty('--pet-scale', String(requestedScale));
+  if (api.previewScale && requestedScale !== lastRequestedScale) {
+    lastRequestedScale = requestedScale;
+    api.previewScale(requestedScale);
+  } else if (desktopLayout && requestedScale === lastRequestedScale) {
+    document.documentElement.style.setProperty('--pet-scale', String(desktopLayout.scale));
+  }
   for (const [name, [variable, fallback]] of Object.entries(OPACITY_FIELDS)) {
     const value = Number(values[name] ?? fallback);
     document.documentElement.style.setProperty(variable, String(Math.max(0, Math.min(100, value)) / 100));
@@ -156,7 +175,7 @@ function applyVisualSettings(values) {
 }
 
 function previewVisualSettings() {
-  const values = { scale: Number(els.scaleInput.value) };
+  const values = { scale: settings.scale };
   for (const name of Object.keys(OPACITY_FIELDS)) {
     values[name] = Number(document.querySelector(`#${name}Input`).value);
     document.querySelector(`#${name}Value`).textContent = `${values[name]}%`;
@@ -185,13 +204,26 @@ function speak(text) {
   window.speechSynthesis.speak(utterance);
 }
 
-function showBubble(text, { duration = 7500, eyebrow = settings.petName, voice = false } = {}) {
+function showBubble(text, { duration = 7500, voice = false } = {}) {
   clearTimeout(bubbleTimer);
-  els.bubbleEyebrow.textContent = eyebrow;
+  bubbleTimer = null;
   els.bubbleText.textContent = String(text ?? '');
+  if (!FLOATING_BUBBLE_ENABLED) {
+    els.speechBubble.classList.remove('visible');
+    return;
+  }
   els.speechBubble.classList.add('visible');
   if (voice) speak(text);
   bubbleTimer = setTimeout(() => els.speechBubble.classList.remove('visible'), duration);
+}
+
+function showSettingsFeedback(text = '', { error = false } = {}) {
+  const message = String(text ?? '');
+  els.settingsFeedback.setAttribute('role', error ? 'alert' : 'status');
+  els.settingsFeedback.setAttribute('aria-live', error ? 'assertive' : 'polite');
+  els.settingsFeedback.classList.toggle('error', error);
+  els.settingsFeedback.textContent = message;
+  els.settingsFeedback.hidden = !message;
 }
 
 function sparkle(clientX, clientY) {
@@ -259,6 +291,7 @@ function addTyping() {
 }
 
 function openChat() {
+  closeSettingsSelects(true);
   applyVisualSettings(settings);
   els.settingsPanel.classList.remove('open');
   els.chatPanel.classList.add('open');
@@ -277,6 +310,7 @@ function toggleChat() {
 }
 
 function closePanels() {
+  closeSettingsSelects(true);
   applyVisualSettings(settings);
   els.chatPanel.classList.remove('open');
   els.settingsPanel.classList.remove('open');
@@ -287,10 +321,16 @@ function hideContextToolbar() {
 }
 
 function showContextToolbar(event) {
-  const width = 132;
-  const height = 132;
-  const x = Math.max(8, Math.min(window.innerWidth - width - 8, event.clientX + 12));
-  const y = Math.max(8, Math.min(window.innerHeight - height - 8, event.clientY + 10));
+  closeSettingsSelects();
+  const width = els.contextToolbar.offsetWidth;
+  const height = els.contextToolbar.offsetHeight;
+  const visible = desktopLayout?.visibleBounds || { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
+  const minX = visible.x + 4;
+  const minY = visible.y + 4;
+  const maxX = Math.max(minX, visible.x + visible.width - width - 4);
+  const maxY = Math.max(minY, visible.y + visible.height - height - 4);
+  const x = Math.max(minX, Math.min(maxX, event.clientX + 8));
+  const y = Math.max(minY, Math.min(maxY, event.clientY + 8));
   els.contextToolbar.style.left = `${x}px`;
   els.contextToolbar.style.top = `${y}px`;
   els.contextToolbar.classList.add('open');
@@ -302,8 +342,7 @@ function populateSettingsForm() {
   els.cityInput.value = settings.city || '';
   els.apiKeyInput.value = '';
   els.apiKeyInput.placeholder = settings.apiKeySet ? '已安全保存；留空即不修改' : 'sk-…';
-  els.reasoningInput.value = settings.reasoningEffort || 'medium';
-  els.scaleInput.value = String(settings.scale || 1);
+  syncModelSettings();
   for (const [name, [, fallback]] of Object.entries(OPACITY_FIELDS)) {
     const value = settings[name] ?? fallback;
     document.querySelector(`#${name}Input`).value = String(value);
@@ -317,7 +356,9 @@ function populateSettingsForm() {
 }
 
 function openSettings() {
+  closeSettingsSelects();
   hideContextToolbar();
+  showSettingsFeedback();
   populateSettingsForm();
   els.chatPanel.classList.remove('open');
   els.settingsPanel.classList.add('open');
@@ -330,16 +371,16 @@ function formatWeather(weather) {
 }
 
 async function showWeather(force = false, addToChat = false) {
-  showBubble('我正在看看窗外的天气…', { duration: 5000, eyebrow: 'WEATHER' });
+  showBubble('我正在看看窗外的天气…', { duration: 5000 });
   try {
     const weather = await api.getWeather(force);
     const message = formatWeather(weather);
-    showBubble(message, { duration: 10500, eyebrow: 'TODAY · WEATHER', voice: addToChat });
+    showBubble(message, { duration: 10500, voice: addToChat });
     if (addToChat) addMessage('assistant', message);
     return weather;
   } catch (error) {
     const message = error.message || '天气暂时迷路了，稍后再试试。';
-    showBubble(message, { eyebrow: 'WEATHER' });
+    showBubble(message);
     if (addToChat) addMessage('system', message);
     return null;
   }
@@ -385,7 +426,7 @@ async function sendChat(message) {
     document.querySelector('#typingMessage')?.remove();
     const message = error.message || '暂时没能连上聊天服务，请稍后再试。';
     addMessage('system', message);
-    showBubble(message, { duration: 9500, eyebrow: 'CONNECTION' });
+    showBubble(message, { duration: 9500 });
     if (/API Key|401|authentication/i.test(message)) setTimeout(openSettings, 700);
   } finally {
     chatBusy = false;
@@ -405,7 +446,7 @@ function inQuietHours(date = new Date()) {
 }
 
 function proactiveTick() {
-  if (!settings.proactiveEnabled || inQuietHours() || chatBusy) return;
+  if (!FLOATING_BUBBLE_ENABLED || !settings.proactiveEnabled || inQuietHours() || chatBusy) return;
   if (Date.now() - lastReminderAt < COMPANION_GREETING_INTERVAL_MS) return;
   lastReminderAt = Date.now();
   const template = proactiveLines[greetingIndex];
@@ -416,28 +457,34 @@ function proactiveTick() {
 
 async function saveSettings(event) {
   event.preventDefault();
+  closeSettingsSelects();
+  showSettingsFeedback();
   const next = {
     petName: els.petNameInput.value,
     city: els.cityInput.value,
     apiKey: els.apiKeyInput.value,
-    reasoningEffort: els.reasoningInput.value,
-    scale: Number(els.scaleInput.value),
-    proactiveEnabled: els.proactiveInput.checked,
-    voiceEnabled: els.voiceInput.checked,
+    modelId: modelConfig.normalizeModelId(els.modelInput.value),
+    ...(FLOATING_BUBBLE_ENABLED ? {
+      proactiveEnabled: els.proactiveInput.checked,
+      voiceEnabled: els.voiceInput.checked,
+    } : {}),
     alwaysOnTop: els.alwaysOnTopInput.checked,
     launchAtLogin: els.launchInput.checked,
     quietStart: settings.quietStart ?? 23,
     quietEnd: settings.quietEnd ?? 8,
     conversationDirectory: els.conversationDirectoryInput.value,
-    ...Object.fromEntries(Object.keys(OPACITY_FIELDS).map((name) => [name, Number(document.querySelector(`#${name}Input`).value)])),
+    ...Object.fromEntries(Object.keys(OPACITY_FIELDS)
+      .filter((name) => FLOATING_BUBBLE_ENABLED || name !== 'bubbleOpacity')
+      .map((name) => [name, Number(document.querySelector(`#${name}Input`).value)])),
   };
   try {
     const saved = await api.saveSettings(next);
     applySettings(saved);
+    closeSettingsSelects(true);
     els.settingsPanel.classList.remove('open');
     showBubble('设置保存好了。', { duration: 5200 });
   } catch (error) {
-    showBubble(error.message || '设置保存失败了。', { eyebrow: 'SETTINGS' });
+    showSettingsFeedback(error.message || '设置保存失败了。', { error: true });
   }
 }
 
@@ -525,54 +572,133 @@ function wireEvents() {
   });
 
   els.settingsForm.addEventListener('submit', saveSettings);
-  els.scaleInput.addEventListener('input', previewVisualSettings);
   for (const name of Object.keys(OPACITY_FIELDS)) {
     document.querySelector(`#${name}Input`).addEventListener('input', previewVisualSettings);
   }
   document.querySelector('#chooseConversationDirectoryBtn').addEventListener('click', async () => {
+    showSettingsFeedback();
     try {
       const directory = await api.chooseConversationDirectory();
       if (directory) els.conversationDirectoryInput.value = directory;
     } catch (error) {
-      showBubble(error.message || '暂时无法选择文件夹。', { duration: 5200 });
+      showSettingsFeedback(error.message || '暂时无法选择文件夹。', { error: true });
     }
   });
-  document.querySelector('#apiKeyHelpBtn').addEventListener('click', () => api.openApiKeys());
+  document.querySelector('#apiKeyHelpBtn').addEventListener('click', async () => {
+    showSettingsFeedback();
+    try {
+      await api.openApiKeys();
+    } catch (error) {
+      showSettingsFeedback(error.message || '暂时无法打开密钥页面。', { error: true });
+    }
+  });
   document.querySelector('#openConversationFolderBtn').addEventListener('click', async () => {
+    showSettingsFeedback();
     try {
       await api.openConversationFolder();
     } catch (error) {
-      showBubble(error.message || '暂时无法打开记录文件夹。', { duration: 5200 });
+      showSettingsFeedback(error.message || '暂时无法打开记录文件夹。', { error: true });
     }
   });
   document.querySelector('#clearKeyBtn').addEventListener('click', async () => {
-    await api.clearApiKey();
-    settings.apiKeySet = false;
-    els.apiKeyInput.value = '';
-    els.apiKeyInput.placeholder = 'sk-…';
-    showBubble('已清除保存的 API Key。', { eyebrow: 'PRIVACY' });
+    showSettingsFeedback();
+    try {
+      await api.clearApiKey();
+      settings.apiKeySet = false;
+      els.apiKeyInput.value = '';
+      els.apiKeyInput.placeholder = 'sk-…';
+      showSettingsFeedback('已清除保存的 API Key。');
+    } catch (error) {
+      showSettingsFeedback(error.message || '暂时无法清除 API Key。', { error: true });
+    }
   });
 
   api.onOpenChat(openChat);
   api.onOpenSettings(openSettings);
   api.onOpenContextPreview(() => showContextToolbar({ clientX: 590, clientY: 420 }));
-  api.onRequestWeather(() => showWeather(true, false));
+  api.onRequestWeather(() => {
+    const addToChat = !FLOATING_BUBBLE_ENABLED;
+    if (addToChat) openChat();
+    return showWeather(true, addToChat);
+  });
 }
 
 async function init() {
+  els.speechBubble.hidden = !FLOATING_BUBBLE_ENABLED;
+  document.querySelectorAll('[data-floating-bubble-setting]').forEach((element) => {
+    element.hidden = !FLOATING_BUBBLE_ENABLED;
+  });
+  const selectContext = {
+    panel: els.settingsPanel,
+    scrollBoundary: document.querySelector('#settingsContent'),
+    footer: document.querySelector('#settingsActions'),
+  };
+  settingsSelects = [
+    window.customSelect.create({ ...selectContext, select: els.modelInput, options: modelConfig.MODEL_OPTIONS }),
+  ];
   wireEvents();
+  api.onDesktopLayout?.(applyDesktopLayout);
   try {
     applySettings(await api.getSettings());
   } catch {
     // Keep local defaults so the character can still render.
   }
+  try {
+    applyDesktopLayout(await api.getDesktopLayout?.());
+  } catch {
+    // The standalone preview retains its local layout.
+  }
   if (queryParams.get('pose') === 'happy') holdHappyPose(true);
   const greeting = randomInitialGreeting();
   addMessage('assistant', greeting);
-  setTimeout(() => {
-    if (!chatBusy) showBubble(greeting, { duration: 9000 });
-  }, 700);
-  setInterval(proactiveTick, COMPANION_GREETING_INTERVAL_MS);
+  if (FLOATING_BUBBLE_ENABLED) {
+    const speechGreeting = speechInitialGreetings[Math.floor(Math.random() * speechInitialGreetings.length)];
+    setTimeout(() => {
+      if (!chatBusy) showBubble(speechGreeting, { duration: 9000 });
+    }, 700);
+    setInterval(proactiveTick, COMPANION_GREETING_INTERVAL_MS);
+  }
 }
 
 init();
+
+function syncModelSettings() {
+  els.modelInput.value = modelConfig.normalizeModelId(settings.modelId);
+  settingsSelects.forEach((control) => control.sync());
+}
+
+function closeSettingsSelects(restoreValues = false) {
+  settingsSelects.forEach((control) => control.close());
+  if (restoreValues) syncModelSettings();
+}
+
+function applyDesktopLayout(layout) {
+  if (!layout || !Number.isFinite(layout.scale) || layout.scale <= 0 ||
+      !layout.petStage || !layout.panel || !layout.greeting || !layout.visibleBounds) return;
+  const fields = [layout.petStage.left, layout.petStage.top, layout.panel.left, layout.panel.top,
+    layout.panel.width, layout.panel.height, layout.greeting.left, layout.greeting.top,
+    layout.greeting.width, layout.visibleBounds.x, layout.visibleBounds.y,
+    layout.visibleBounds.width, layout.visibleBounds.height];
+  if (!fields.every(Number.isFinite) || layout.panel.width <= 0 || layout.panel.height <= 0 ||
+      layout.visibleBounds.width <= 0 || layout.visibleBounds.height <= 0) return;
+  closeSettingsSelects();
+  hideContextToolbar();
+  desktopLayout = layout;
+  const style = document.documentElement.style;
+  const pixels = {
+    '--pet-stage-left': layout.petStage.left, '--pet-stage-top': layout.petStage.top,
+    '--panel-left': layout.panel.left, '--panel-top': layout.panel.top,
+    '--panel-width': layout.panel.width, '--panel-height': layout.panel.height,
+    '--greeting-left': layout.greeting.left - layout.petStage.left,
+    '--greeting-top': layout.greeting.top - layout.petStage.top,
+    '--greeting-width': layout.greeting.width,
+    '--greeting-max-height': Number.isFinite(layout.greeting.maxHeight) && layout.greeting.maxHeight > 0
+      ? layout.greeting.maxHeight : 104,
+  };
+  for (const [property, value] of Object.entries(pixels)) style.setProperty(property, `${value}px`);
+  style.setProperty('--pet-stage-right', 'auto');
+  style.setProperty('--pet-stage-bottom', 'auto');
+  style.setProperty('--greeting-right', 'auto');
+  style.setProperty('--pet-scale', String(layout.scale));
+  document.body.dataset.panelSide = layout.panelSide;
+}

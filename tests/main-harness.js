@@ -14,7 +14,9 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
 } = {}) {
   const root = os.tmpdir();
   const directory = await fs.mkdtemp(path.join(root, 'whale-girl-test-'));
+  let context;
   t.after(async () => {
+    if (context) vm.runInContext('clearTimeout(moveSaveTimer);', context);
     assert.equal(path.dirname(directory), root);
     assert.ok(path.basename(directory).startsWith('whale-girl-test-'));
     await fs.rm(directory, { recursive: true, force: true });
@@ -35,11 +37,13 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
   const handlers = new Map();
   const eventHandlers = new Map();
   const positionChanges = [];
+  const boundsChanges = [];
   const windowCalls = [];
   const rendererMessages = [];
   const windowEvents = new EventEmitter();
   const appEvents = new EventEmitter();
   const powerEvents = new EventEmitter();
+  const screenEvents = new EventEmitter();
   const trayEvents = new EventEmitter();
   const readyCallbacks = [];
   const windowState = { visible: true, minimized: false, destroyed: false, alwaysOnTop: false, nativeAlwaysOnTop: false, focused: false };
@@ -48,6 +52,7 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
   let quitCalls = 0;
   let bounds = { ...windowBounds };
   let cursor = { ...cursorPoint };
+  let availableDisplays = displays;
   let loginUpdates = 0;
   const testWindow = {
     setAlwaysOnTop(enabled, level) {
@@ -83,6 +88,11 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
     getBounds: () => ({ ...bounds }),
     getPosition: () => [bounds.x, bounds.y],
     setPosition: (x, y) => { bounds = { ...bounds, x, y }; positionChanges.push({ x, y }); },
+    setBounds: (next) => {
+      bounds = { ...bounds, ...next };
+      boundsChanges.push({ ...bounds });
+      positionChanges.push({ x: bounds.x, y: bounds.y });
+    },
   };
   const electron = {
     app: {
@@ -116,14 +126,18 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
     },
     safeStorage: { isEncryptionAvailable: () => false },
     screen: {
-      getPrimaryDisplay: () => displays[0],
-      getAllDisplays: () => displays,
+      on: (...args) => screenEvents.on(...args),
+      getPrimaryDisplay: () => availableDisplays[0],
+      getAllDisplays: () => availableDisplays,
       getCursorScreenPoint: () => ({ ...cursor }),
-      getDisplayNearestPoint: (point) => displays.find(({ workArea: area }) =>
-        point.x >= area.x && point.x < area.x + area.width && point.y >= area.y && point.y < area.y + area.height) || displays[0],
+      getDisplayNearestPoint: (point) => availableDisplays.reduce((best, display) => {
+        const distance = ({ workArea: area }) => Math.max(area.x - point.x, 0, point.x - area.x - area.width) ** 2
+          + Math.max(area.y - point.y, 0, point.y - area.y - area.height) ** 2;
+        return distance(display) < distance(best) ? display : best;
+      }),
     },
   };
-  const context = vm.createContext({
+  context = vm.createContext({
     require: (name) => name === 'electron' ? electron : name === './conversation-store'
       ? { ...storeModule, createConversationStore: store ? () => store : storeModule.createConversationStore }
       : require(name.startsWith('./') ? path.join(__dirname, '..', 'src', name) : name),
@@ -140,6 +154,7 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
     directory,
     appPaths,
     positionChanges,
+    boundsChanges,
     windowCalls,
     rendererMessages,
     get windowState() { return { ...windowState }; },
@@ -150,6 +165,7 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
     emitWindow: (event, ...args) => windowEvents.emit(event, ...args),
     emitApp: (event, ...args) => appEvents.emit(event, ...args),
     emitPower: (event, ...args) => powerEvents.emit(event, ...args),
+    emitScreen: (event, ...args) => screenEvents.emit(event, ...args),
     emitTray: (event, ...args) => trayEvents.emit(event, ...args),
     clickTray: (label) => {
       const item = trayMenu.find((entry) => entry.label === label);
@@ -161,12 +177,11 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
       await vm.runInContext('conversationStore.initialize()', context);
     },
     get windowBounds() { return { ...bounds }; },
-    constrain: (position, display, scale) => context.constrainWindowPosition(position, display, scale),
-    restorePosition: () => context.restoreWindowPosition(),
-    defaultPosition: () => context.defaultWindowPosition(),
+    restoreLayout: () => context.restoreDesktopLayout(),
     createWindow: () => context.createWindow(),
     createTray: () => context.createTray(),
     setCursor: (point) => { cursor = { ...point }; },
+    setDisplays: (next) => { availableDisplays = next; },
     get loginUpdates() { return loginUpdates; },
   };
 }

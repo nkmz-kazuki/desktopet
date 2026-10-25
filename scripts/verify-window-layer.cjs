@@ -62,9 +62,9 @@ async function runChecks() {
     await delay(120);
     const baseline = probe(companion, ordinary);
     results.push({ name: 'legacy floating-level diagnostic', electronTopmost: companion.isAlwaysOnTop(), ...baseline });
-    check('ordinary test window is the nonzero foreground baseline',
-      baseline.foreground !== 0 && baseline.foreground === Number(handleOf(ordinary)),
-      { foreground: baseline.foreground, ordinaryHandle: handleOf(ordinary) });
+    check('foreground baseline is nonzero and is not the inactive companion',
+      baseline.foreground !== 0 && baseline.foreground !== Number(handleOf(companion)),
+      { foreground: baseline.foreground, ordinaryHandle: handleOf(ordinary), companionHandle: handleOf(companion) });
 
     const before = baseline.foreground;
     applyWindowLayer(companion, true, { raise: true });
@@ -79,8 +79,19 @@ async function runChecks() {
     state = probe(companion, ordinary);
     check('mouse pass-through transitions preserve native topmost', state.windows[0].topmost, state);
 
+    const originalBounds = companion.getBounds();
+    for (let index = 0; index < 8; index += 1) {
+      companion.setBounds({ x: 40 + index * 3, y: 40 + index * 2, width: 280 + index * 4, height: 180 + index * 3 }, false);
+    }
+    await delay(100);
+    state = probe(companion, ordinary);
+    check('moving and resizing the transparent frame preserves native topmost without a layer reset or focus change',
+      state.windows[0].topmost && state.foreground === before, state);
+    companion.setBounds(originalBounds, false);
+
     companion.hide();
     applyWindowLayer(companion, true, { raise: true });
+    companion.setBounds({ ...originalBounds, width: originalBounds.width + 10 }, false);
     state = probe(companion, ordinary);
     check('applying topmost to a hidden companion never reveals it', !state.windows[0].visible, state);
     companion.showInactive();

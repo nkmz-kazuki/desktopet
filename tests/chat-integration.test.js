@@ -34,10 +34,10 @@ function searchResults() {
   return { results: [{ title: SOURCE_TITLE, url: SOURCE_URL, snippet: '搜索返回的测试资料。' }] };
 }
 
-async function scenario(t, { responses, search = () => jsonResponse(searchResults()) }) {
+async function scenario(t, { responses, search = () => jsonResponse(searchResults()), saved }) {
   const calls = [];
   let responseIndex = 0;
-  const harness = await mainHarness(t, { fetchImpl: async (url, options) => {
+  const harness = await mainHarness(t, { saved, fetchImpl: async (url, options) => {
     const endpoint = String(url);
     const body = options?.body ? JSON.parse(options.body) : undefined;
     calls.push({ url: endpoint, method: options?.method, body });
@@ -57,6 +57,91 @@ async function scenario(t, { responses, search = () => jsonResponse(searchResult
     archive: async () => fs.readFile((await harness.invoke('settings:get')).conversationFile, 'utf8'),
   };
 }
+
+test('both active model IDs reach the Responses request with max reasoning even after loading an old lower setting', async (t) => {
+  for (const modelId of ['deepseek-flash', 'deepseek-v4-pro']) {
+    await t.test(modelId, async (subtest) => {
+      const harness = await scenario(subtest, {
+        saved: { modelId, reasoningEffort: 'none' }, responses: [finalAnswer('海水潮汐主要受引力影响。')],
+      });
+      const result = await harness.invoke('chat:send', '解释一下海洋潮汐。');
+      assert.equal(result.error, undefined);
+      assert.equal(result.model, modelId);
+      assert.equal(harness.modelCalls().length, 1);
+      assert.equal(harness.modelCalls()[0].body.model, modelId);
+      assert.deepEqual(harness.modelCalls()[0].body.reasoning, { effort: 'max' });
+      assert.equal(harness.searchCalls().length, 0);
+    });
+  }
+});
+
+test('the production prompt requests prose without asterisk formatting or hash headings while long answers and literal code remain intact', async (t) => {
+  const answer = '1. 这是完整的解释文字。\n'.repeat(7000) + '\n```python\n# 保留代码注释\nanswer = 2 ** 8\n```\n逐字引用：“# 原文标题与 **原文星号**”。';
+  const harness = await scenario(t, { responses: [finalAnswer(answer)] });
+  const result = await harness.invoke('chat:send', '详细解释并保留代码及逐字引用。');
+  assert.equal(result.error, undefined);
+  assert.equal(result.text, answer);
+  assert.ok((await harness.archive()).includes(answer));
+  const { instructions } = harness.modelCalls()[0].body;
+  assert.ok(instructions.includes('解释文字用纯文本，分点可用数字编号，不用星号或双星号（**）做加粗/项目符号，不用井号（#）标注标题层级；代码和要求逐字引用的原文保持原样。'));
+});
+
+test('provider model metadata is retained when available', async (t) => {
+  const harness = await scenario(t, {
+    saved: { modelId: 'deepseek-v4-pro', reasoningEffort: 'max' },
+    responses: [finalAnswer('这是正式回答。', { model: 'deepseek-v4-pro-test-version' })],
+  });
+  const result = await harness.invoke('chat:send', '讲个故事。');
+  assert.equal(result.model, 'deepseek-v4-pro-test-version');
+  assert.equal(harness.modelCalls()[0].body.model, 'deepseek-v4-pro');
+});
+
+test('changing settings during search freezes the initial model across tool and fallback rounds while all rounds use max reasoning', async (t) => {
+  for (const { name, first, initial, changed } of [
+    {
+      name: 'model function tool', first: toolResponse(searchCall()),
+      initial: { modelId: 'deepseek-flash', reasoningEffort: 'high' },
+      changed: { modelId: 'deepseek-v4-pro', reasoningEffort: 'max' },
+    },
+    {
+      name: 'mandatory fallback search', first: finalAnswer('首轮尚未核实的回答。'),
+      initial: { modelId: 'deepseek-v4-pro', reasoningEffort: 'none' },
+      changed: { modelId: 'deepseek-flash', reasoningEffort: 'low' },
+    },
+  ]) {
+    await t.test(name, async (subtest) => {
+      let signalSearch;
+      let finishSearch;
+      const searchStarted = new Promise((resolve) => { signalSearch = resolve; });
+      const searchPending = new Promise((resolve) => { finishSearch = resolve; });
+      const harness = await scenario(subtest, {
+        saved: initial,
+        responses: [first, finalAnswer('根据实际检索作出的正式回答。'), finalAnswer('接下来的海洋故事。')],
+        search: async () => { signalSearch(); return searchPending; },
+      });
+      const pending = harness.invoke('chat:send', '查一下今年的科学奖项。');
+      await searchStarted;
+      await harness.invoke('settings:save', changed);
+      finishSearch(jsonResponse(searchResults()));
+      const result = await pending;
+      assert.equal(result.error, undefined);
+      assert.equal(result.model, initial.modelId);
+      assert.ok(result.text.includes(SOURCE_URL));
+      assert.equal(harness.modelCalls().length, 2);
+      for (const { body } of harness.modelCalls()) {
+        assert.equal(body.model, initial.modelId);
+        assert.equal(body.reasoning.effort, 'max');
+      }
+      assert.equal(harness.searchCalls().length, 1);
+      assert.equal('model' in harness.searchCalls()[0].body, false);
+      assert.equal('reasoning' in harness.searchCalls()[0].body, false);
+      const next = await harness.invoke('chat:send', '请讲个海洋故事。');
+      assert.equal(next.model, changed.modelId);
+      assert.equal(harness.modelCalls()[2].body.model, changed.modelId);
+      assert.equal(harness.modelCalls()[2].body.reasoning.effort, 'max');
+    });
+  }
+});
 
 test('internal-only model output returns a friendly retry error, archives no internal content and leaves the next request clean', async (t) => {
   const harness = await scenario(t, { responses: [

@@ -1,6 +1,6 @@
 {
   "name": "whale-girl",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "鲸鱼娘 · Windows 桌面陪伴",
   "main": "src/main.js",
   "author": "nkmz-kazuki",
@@ -10,6 +10,7 @@
     "dev": "electron . --dev",
     "test": "node --test tests/*.test.js",
     "test:window": "node scripts/verify-window-layer.cjs",
+    "test:models:live": "node scripts/verify-model-api.cjs",
     "build:icon": "electron scripts/build-icon.cjs",
     "dist": "electron-builder --win nsis --x64"
   },
@@ -43,7 +44,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
+      "createDesktopShortcut": false,
       "createStartMenuShortcut": true,
       "shortcutName": "鲸鱼娘"
     }
