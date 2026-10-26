@@ -25,6 +25,7 @@ $taskStates = foreach ($taskValue in $HandleList.Split(',')) {
   [ordered]@{
     handle = $taskHandle.ToInt64()
     topmost = (([WindowLayerProbe]::GetWindowLongPtr($taskHandle, -20).ToInt64() -band 8) -ne 0)
+    mouseTransparent = (([WindowLayerProbe]::GetWindowLongPtr($taskHandle, -20).ToInt64() -band 32) -ne 0)
     visible = [WindowLayerProbe]::IsWindowVisible($taskHandle)
     minimized = [WindowLayerProbe]::IsIconic($taskHandle)
     zIndex = $taskOrder.IndexOf($taskHandle.ToInt64())

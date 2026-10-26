@@ -941,6 +941,94 @@ async function verifyHiddenFloatingBubble({ window, evaluate, check, delay, sett
   }
 }
 
+async function verifyCrossScreenFrames({ window, evaluate, check, settle, waitFor }) {
+  const { resolveDesktopLayout } = require('../src/desktop-layout');
+  const workArea = { x: 0, y: 0, width: 1536, height: 960 };
+  const layoutAt = x => resolveDesktopLayout({ petAnchor: { x, y: 940 }, scale: 1, workArea });
+  const crossing = Array.from({ length: 201 }, (_, index) => 680 + index).find(x => layoutAt(x - 1).panelSide !== layoutAt(x).panelSide);
+  if (!crossing) throw new Error('No panel-side crossing found in the desktop fixture');
+  const offsets = [-12, -4, -1, 0, 1, 4, 12, 4, 1, 0, -1, -4, -12];
+  const layouts = offsets.map(offset => layoutAt(crossing + offset));
+  window.setContentSize(workArea.width, workArea.height);
+  await waitFor(`innerWidth === ${workArea.width} && innerHeight === ${workArea.height}`);
+  await evaluate(`document.body.classList.remove('preview'); applySettings({ scale: 1 });
+    window.__qaCrossMarker = document.createElement('div');
+    window.__qaCrossMarker.style.cssText = 'position:fixed;left:0;top:0;width:8px;height:8px;z-index:999999;pointer-events:none';
+    document.body.appendChild(window.__qaCrossMarker);`);
+  const summaries = [];
+  try {
+    for (const chatOpen of [false, true]) {
+      const mode = chatOpen ? 'chat-open' : 'chat-closed';
+      await evaluate(`closePanels(); applyDesktopLayout(${JSON.stringify(layouts[0])}); ${chatOpen ? 'window.__qa.emit("chat")' : ''};
+        window.__qaCrossMarker.style.backgroundColor = 'transparent';`);
+      await settle();
+      const nativeBounds = window.getBounds();
+      const contentBefore = await evaluate('document.querySelector("#messages").textContent');
+      const frames = new Map();
+      const paintErrors = [];
+      const onPaint = (_event, _dirty, image) => {
+        try {
+          const size = image.getSize(), bitmap = image.toBitmap();
+          const bitmapScale = Math.sqrt(bitmap.length / (size.width * size.height * 4));
+          const width = Math.round(size.width * bitmapScale), height = Math.round(size.height * bitmapScale);
+          const sx = width / workArea.width, sy = height / workArea.height;
+          const indexAt = (x, y) => (Math.floor(y * sy) * width + Math.floor(x * sx)) * 4;
+          const marker = indexAt(2, 2), index = bitmap[marker + 2] - 21;
+          if (bitmap[marker] !== 221 || bitmap[marker + 1] !== 17 || bitmap[marker + 3] !== 255 || index < 0 || index >= layouts.length || frames.has(index)) return;
+          const layout = layouts[index];
+          const pet = { left: layout.petAnchor.x - 221.65, top: layout.petAnchor.y - 604, right: layout.petAnchor.x + 181.35, bottom: layout.petAnchor.y };
+          const panel = layout.panel;
+          let outsideAlpha = 0, outsidePixels = 0, maximumOutsideAlpha = 0;
+          for (let y = 12; y < workArea.height; y += 4) for (let x = 12; x < workArea.width; x += 4) {
+            if (x >= pet.left - 80 && x <= pet.right + 80 && y >= pet.top - 80 && y <= pet.bottom + 80) continue;
+            if (chatOpen && x >= panel.left - 2 && x <= panel.left + panel.width + 2 && y >= panel.top - 2 && y <= panel.top + panel.height + 2) continue;
+            const alpha = bitmap[indexAt(x, y) + 3];
+            outsidePixels += 1;
+            if (alpha) { outsideAlpha += 1; maximumOutsideAlpha = Math.max(maximumOutsideAlpha, alpha); }
+          }
+          const bodyAlpha = bitmap[indexAt(pet.left + .1667 + 620 * 604 / 1536, pet.top + 834 * 604 / 1536) + 3];
+          const stableNativeBounds = JSON.stringify(window.getBounds()) === JSON.stringify(nativeBounds);
+          frames.set(index, { index, anchorX: layout.petAnchor.x, panelSide: layout.panelSide, outsidePixels, outsideAlpha, maximumOutsideAlpha, bodyAlpha, stableNativeBounds });
+          if ([2, 3, 9, 10].includes(index)) fs.writeFileSync(path.join(outputDirectory, `cross-middle-${mode}-${index}.png`), image.toPNG());
+        } catch (error) { paintErrors.push(error.message); }
+      };
+      window.webContents.on('paint', onPaint);
+      let geometry;
+      try {
+        geometry = await evaluate(`(async () => {
+          const layouts = ${JSON.stringify(layouts)}, measured = [];
+          for (let index = 0; index < layouts.length; index += 1) {
+            applyDesktopLayout(layouts[index]);
+            window.__qaCrossMarker.style.backgroundColor = 'rgb(' + (index + 21) + ', 17, 221)';
+            const rect = document.querySelector('#petVisual').getBoundingClientRect();
+            measured.push({ index, left: rect.left, top: rect.top });
+            for (let frame = 0; frame < 3; frame += 1) await new Promise(resolve => requestAnimationFrame(resolve));
+          }
+          return measured;
+        })()`);
+        await settle();
+      } finally { window.webContents.off('paint', onPaint); }
+      const sampled = [...frames.values()].sort((a, b) => a.index - b.index);
+      const stableLayoutBounds = layouts.every(layout => JSON.stringify(layout.windowBounds) === JSON.stringify(workArea));
+      const continuousPosition = geometry.every((item, index) => Math.abs(item.left - (layouts[index].petAnchor.x - 221.65)) < .1 &&
+        Math.abs(item.top - (layouts[index].petAnchor.y - 604)) < .1);
+      const summary = { mode, crossing, capturedFrames: sampled.length, expectedFrames: layouts.length, stableLayoutBounds, continuousPosition,
+        paintErrors, frames: sampled, screenshots: [2, 3, 9, 10].map(index => `cross-middle-${mode}-${index}.png`) };
+      summaries.push(summary);
+      check(`crossing the screen middle in both directions keeps one character and a stable frame: ${mode}`,
+        paintErrors.length === 0 && sampled.length === layouts.length && stableLayoutBounds && continuousPosition &&
+        sampled.every(frame => frame.stableNativeBounds && frame.bodyAlpha >= 240 && frame.outsideAlpha === 0), summary);
+      check(`cross-middle motion preserves chat contents and the requested panel state: ${mode}`,
+        await evaluate('document.querySelector("#messages").textContent') === contentBefore &&
+        await evaluate('document.querySelector("#chatPanel").classList.contains("open")') === chatOpen &&
+        await evaluate('window.__qaFloatingBubbleHidden()'));
+    }
+    fs.writeFileSync(path.join(outputDirectory, 'cross-middle-frames.json'), JSON.stringify({ method: 'Continuous Electron offscreen paint frames; a test-only corner marker identifies each renderer frame; alpha scan excludes the current character shadow and the current chat panel.', summaries }, null, 2));
+  } finally {
+    await evaluate('window.__qaCrossMarker.remove(); delete window.__qaCrossMarker; document.body.classList.add("preview"); closePanels()');
+  }
+}
+
 async function verifyDesktopLayouts({ window, evaluate, check, settle, capture, waitFor }) {
   const { resolveDesktopLayout } = require('../src/desktop-layout');
   const primary = { x: 0, y: 0, width: 1536, height: 960 };
@@ -972,6 +1060,7 @@ async function verifyDesktopLayouts({ window, evaluate, check, settle, capture, 
     Math.abs(rect.width - expected.width) < .7 && Math.abs(rect.height - expected.height) < .7;
   await evaluate(`closePanels(); holdHappyPose(false); document.querySelector('#petVisual').style.animation = 'none';`);
   try {
+    await verifyCrossScreenFrames({ window, evaluate, check, settle, waitFor });
     for (const fixture of fixtures) {
       const layout = resolveDesktopLayout(fixture);
       window.setContentSize(layout.windowBounds.width, layout.windowBounds.height);

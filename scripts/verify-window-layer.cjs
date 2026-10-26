@@ -7,7 +7,7 @@ const { spawnSync } = require('node:child_process');
 const projectRoot = path.resolve(__dirname, '..');
 
 async function runChecks() {
-  const { app, BrowserWindow } = require('electron');
+  const { app, BrowserWindow, screen } = require('electron');
   const { applyWindowLayer } = require('../src/window-layer');
   const profile = process.env.WHALE_WINDOW_LAYER_PROFILE;
   assert(profile, 'Use node scripts/verify-window-layer.cjs');
@@ -88,6 +88,20 @@ async function runChecks() {
     check('moving and resizing the transparent frame preserves native topmost without a layer reset or focus change',
       state.windows[0].topmost && state.foreground === before, state);
     companion.setBounds(originalBounds, false);
+
+    await companion.webContents.executeJavaScript('document.body.style.visibility = "hidden";');
+    companion.setIgnoreMouseEvents(true, { forward: true });
+    companion.setBounds(screen.getPrimaryDisplay().workArea, false);
+    await delay(100);
+    state = probe(companion, ordinary);
+    check('a stable work-area frame stays topmost and mouse-transparent without taking focus',
+      state.windows[0].topmost && state.windows[0].mouseTransparent && state.foreground === before, state);
+    companion.setIgnoreMouseEvents(false, { forward: true });
+    state = probe(companion, ordinary);
+    check('interactive content can disable pass-through without dropping topmost',
+      state.windows[0].topmost && !state.windows[0].mouseTransparent && state.foreground === before, state);
+    companion.setBounds(originalBounds, false);
+    await companion.webContents.executeJavaScript('document.body.style.visibility = "visible";');
 
     companion.hide();
     applyWindowLayer(companion, true, { raise: true });

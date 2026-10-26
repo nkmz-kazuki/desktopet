@@ -195,7 +195,10 @@ function recordLayoutPosition(layout, target = settings) {
 function applyDesktopLayout(layout) {
   if (quitting || !mainWindow || mainWindow.isDestroyed() || PREVIEW_MODE) return;
   currentLayout = layout;
-  mainWindow.setBounds(layout.windowBounds, false);
+  const bounds = mainWindow.getBounds();
+  if (['x', 'y', 'width', 'height'].some((key) => bounds[key] !== layout.windowBounds[key])) {
+    mainWindow.setBounds(layout.windowBounds, false);
+  }
   sendToRenderer('desktop-layout', layout);
 }
 
@@ -282,8 +285,8 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     if (currentLayout) sendToRenderer('desktop-layout', currentLayout);
-    showCompanion();
     mainWindow.setIgnoreMouseEvents(true, { forward: true });
+    showCompanion();
     if (screenshotPath) {
       setTimeout(() => {
         const screenshotMode = process.env.QINGYU_SCREENSHOT_MODE;

@@ -70,18 +70,9 @@ function resolveDesktopLayout({ petAnchor, scale = 1, workArea }) {
       y: clamp(candidate.y, area.y + FRAME_MARGIN, bottom - FRAME_MARGIN - greetingHeight),
     })).reduce((best, candidate) => overlap(candidate) < overlap(best) ? candidate : best);
   }
-  const petPaint = {
-    x: pet.left - 16, y: pet.top - 17 - 16,
-    width: PET_WIDTH * effectiveScale + 12.59375 * effectiveScale + 32,
-    height: PET_HEIGHT * effectiveScale + 17 + 47,
-  };
-  const menuReserve = { x: pet.left, y: pet.top, width: petPaint.width + 114, height: PET_HEIGHT * effectiveScale + 114 };
-  const rectangles = [petPaint, panel, greeting, menuReserve];
-  const minX = Math.max(area.x, Math.floor(Math.min(...rectangles.map((rect) => rect.x))));
-  const minY = Math.max(area.y, Math.floor(Math.min(...rectangles.map((rect) => rect.y))));
-  const maxX = Math.min(right, Math.ceil(Math.max(...rectangles.map((rect) => rect.x + rect.width))));
-  const maxY = Math.min(bottom, Math.ceil(Math.max(...rectangles.map((rect) => rect.y + rect.height))));
-  const windowBounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  const minX = area.x;
+  const minY = area.y;
+  const windowBounds = { ...area };
   return {
     windowBounds,
     petStage: { left: anchor.x - 257.65 - minX, top: anchor.y - LEGACY_ANCHOR_Y - minY },

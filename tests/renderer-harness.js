@@ -18,6 +18,7 @@ async function rendererHarness(options = {}) {
   const missingSelectors = [];
   const elements = [];
   const ids = new Map();
+  let hitTargetId = 'petVisual';
   const bridgeEvents = new Map();
   const calls = { saveSettings: [], sendChat: [], moveBy: [], setIgnoreMouse: [], previewScale: [], spoken: [], chooseDirectory: 0 };
   const opacityDefaults = { petOpacity: 100, chatOpacity: 80, messageOpacity: 88, inputOpacity: 92, textOpacity: 100, bubbleOpacity: 50 };
@@ -164,8 +165,12 @@ async function rendererHarness(options = {}) {
     const match = selector.match(/^\[([^\]]+)\]$/);
     return match ? elements.filter((element) => match[1] in element.attrs && !element.removed) : [];
   };
-  document.createElement = (name) => new Element(name);
-  document.elementFromPoint = () => ids.get('petVisual');
+  document.createElement = (name) => {
+    const element = new Element(name);
+    if (name === 'canvas') element.getContext = () => options.canvasContext ?? null;
+    return element;
+  };
+  document.elementFromPoint = () => ids.get(hitTargetId) || document.body;
   const api = {
     getSettings: async () => ({ ...saved }),
     getDesktopLayout: async () => options.desktopLayout ?? null,
@@ -214,6 +219,7 @@ async function rendererHarness(options = {}) {
   Object.assign(window, {
     petAPI: api, location: { search: '' }, innerWidth: 780, innerHeight: 720,
     speechSynthesis: { cancel() {}, speak: (utterance) => calls.spoken.push(utterance.text) },
+    getComputedStyle: () => options.imageStyle || { transform: 'matrix(1,0,0,1,12.59375,0)', width: '403px', height: '604px' },
   });
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
@@ -226,8 +232,16 @@ async function rendererHarness(options = {}) {
   class SpeechUtterance {
     constructor(text) { this.text = text; }
   }
+  class Matrix {
+    constructor(transform) {
+      const values = transform === 'none' ? [1, 0, 0, 1, 0, 0]
+        : transform.match(/^matrix\(([^)]+)\)$/)?.[1].split(',').map(Number);
+      if (!values || values.length !== 6) throw new Error('Invalid test transform');
+      ['a', 'b', 'c', 'd', 'e', 'f'].forEach((name, index) => { this[name] = values[index]; });
+    }
+  }
   const context = vm.createContext({
-    window, document, Date: ClockDate, console, URLSearchParams, Event: RendererEvent, SpeechSynthesisUtterance: SpeechUtterance,
+    window, document, Date: ClockDate, console, URLSearchParams, Event: RendererEvent, SpeechSynthesisUtterance: SpeechUtterance, DOMMatrixReadOnly: Matrix,
     Math: options.random == null ? Math : Object.assign(Object.create(Math), { random: () => options.random }),
     setTimeout: (callback, delay) => schedule(callback, delay),
     clearTimeout: (id) => timers.delete(id),
@@ -256,7 +270,8 @@ async function rendererHarness(options = {}) {
     calls, bubbleChanges, queriedSelectors, missingSelectors, html,
     get activeElement() { return document.activeElement; },
     pointerDown: async (target) => document.dispatch('pointerdown', { target }),
-    windowEvent: async (name) => window.dispatch(name),
+    windowEvent: async (name, details) => window.dispatch(name, details),
+    setHitTarget: (id) => { hitTargetId = id; },
     openSettings: async () => { await bridgeEvents.get('onOpenSettings')(); await flush(); },
     openChat: async () => { await bridgeEvents.get('onOpenChat')(); await flush(); },
     requestWeather: async () => { await bridgeEvents.get('onRequestWeather')(); await flush(); },

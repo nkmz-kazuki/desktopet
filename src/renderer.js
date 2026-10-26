@@ -115,34 +115,58 @@ function setMouseIgnore(ignore) {
 }
 
 function isOpaquePixel(clientX, clientY) {
-  if (!alphaContext || !els.petImage.complete || !els.petHappyImage.complete) return true;
+  if (!alphaContext || !alphaCanvas || !els.petImage.complete || !els.petHappyImage.complete) return false;
   const rect = els.petVisual.getBoundingClientRect();
+  if (![clientX, clientY, rect.left, rect.top, rect.width, rect.height].every(Number.isFinite)
+      || rect.width <= 0 || rect.height <= 0) return false;
   const x = Math.floor((clientX - rect.left) / rect.width * els.petImage.naturalWidth);
   const y = Math.floor((clientY - rect.top) / rect.height * els.petImage.naturalHeight);
   if (x < 0 || x >= alphaCanvas.width || y < 0 || y >= alphaCanvas.height) return false;
-  return alphaContext.getImageData(x, y, 1, 1).data[3] > 18;
+  try {
+    return alphaContext.getImageData(x, y, 1, 1).data[3] > 18;
+  } catch {
+    alphaCanvas = null;
+    alphaContext = null;
+    return false;
+  }
 }
 
 function prepareAlphaMap() {
+  alphaCanvas = null;
+  alphaContext = null;
   if (!els.petImage.complete || !els.petHappyImage.complete) return;
   const imageWidth = els.petImage.naturalWidth;
   const imageHeight = els.petImage.naturalHeight;
-  const happyStyle = window.getComputedStyle(els.petHappyImage);
-  const registration = new DOMMatrixReadOnly(happyStyle.transform);
-  const offsetX = registration.e * imageWidth / parseFloat(happyStyle.width);
-  const offsetY = registration.f * imageHeight / parseFloat(happyStyle.height);
-  alphaCanvas = document.createElement('canvas');
-  alphaCanvas.width = imageWidth + Math.max(0, Math.ceil(offsetX));
-  alphaCanvas.height = imageHeight + Math.max(0, Math.ceil(offsetY));
-  alphaContext = alphaCanvas.getContext('2d', { willReadFrequently: true });
-  alphaContext.drawImage(els.petImage, 0, 0);
-  alphaContext.save();
-  alphaContext.setTransform(
-    registration.a, registration.b, registration.c, registration.d,
-    offsetX, offsetY,
-  );
-  alphaContext.drawImage(els.petHappyImage, 0, 0, imageWidth, imageHeight);
-  alphaContext.restore();
+  if (![imageWidth, imageHeight, els.petHappyImage.naturalWidth, els.petHappyImage.naturalHeight]
+    .every((value) => Number.isFinite(value) && value > 0)) return;
+  try {
+    const happyStyle = window.getComputedStyle(els.petHappyImage);
+    const displayWidth = parseFloat(happyStyle.width);
+    const displayHeight = parseFloat(happyStyle.height);
+    if (![displayWidth, displayHeight].every((value) => Number.isFinite(value) && value > 0)) return;
+    const registration = new DOMMatrixReadOnly(happyStyle.transform);
+    if (![registration.a, registration.b, registration.c, registration.d, registration.e, registration.f]
+      .every(Number.isFinite)) return;
+    const offsetX = registration.e * imageWidth / displayWidth;
+    const offsetY = registration.f * imageHeight / displayHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = imageWidth + Math.max(0, Math.ceil(offsetX));
+    canvas.height = imageHeight + Math.max(0, Math.ceil(offsetY));
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return;
+    context.drawImage(els.petImage, 0, 0);
+    context.save();
+    context.setTransform(
+      registration.a, registration.b, registration.c, registration.d,
+      offsetX, offsetY,
+    );
+    context.drawImage(els.petHappyImage, 0, 0, imageWidth, imageHeight);
+    context.restore();
+    alphaCanvas = canvas;
+    alphaContext = context;
+  } catch {
+    // Keep the transparent window click-through if its image pixels cannot be read.
+  }
 }
 
 function updateMousePassThrough(event) {
@@ -524,6 +548,8 @@ function endDrag(event) {
 function wireEvents() {
   els.petImage.addEventListener('load', prepareAlphaMap);
   els.petHappyImage.addEventListener('load', prepareAlphaMap);
+  els.petImage.addEventListener('error', prepareAlphaMap);
+  els.petHappyImage.addEventListener('error', prepareAlphaMap);
   if (els.petImage.complete && els.petHappyImage.complete) prepareAlphaMap();
   window.addEventListener('mousemove', updateMousePassThrough);
   window.addEventListener('blur', () => {

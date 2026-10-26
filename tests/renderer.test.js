@@ -8,6 +8,103 @@ const opacityVariables = {
   inputOpacity: '--input-opacity', textOpacity: '--text-opacity', bubbleOpacity: '--bubble-opacity',
 };
 
+async function loadTestImages(harness, dimensions = {}) {
+  for (const id of ['petImage', 'petHappyImage']) {
+    Object.assign(harness.get(id), { complete: true, naturalWidth: 1024, naturalHeight: 1536, ...dimensions });
+  }
+  await harness.get('petImage').dispatch('load');
+}
+
+test('unavailable character pixels leave both empty desktop and character bounds click-through while panels remain usable', async () => {
+  const harness = await rendererHarness();
+  harness.get('petVisual').rect = { left: 100, top: 150, width: 403, height: 604 };
+  for (const point of [{ clientX: 10, clientY: 10 }, { clientX: 300, clientY: 450 }]) {
+    await harness.openChat();
+    assert.equal(harness.calls.setIgnoreMouse.at(-1), false);
+    harness.setHitTarget('petVisual');
+    await harness.windowEvent('mousemove', point);
+    assert.equal(harness.calls.setIgnoreMouse.at(-1), true);
+  }
+  harness.setHitTarget('chatInput');
+  await harness.windowEvent('mousemove', { clientX: 50, clientY: 600 });
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), false);
+  await harness.openSettings();
+  harness.setHitTarget('petNameInput');
+  await harness.windowEvent('mousemove', { clientX: 60, clientY: 150 });
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), false);
+  await harness.get('petVisual').dispatch('contextmenu', { clientX: 300, clientY: 450 });
+  harness.setHitTarget('contextSettingsBtn');
+  await harness.windowEvent('mousemove', { clientX: 320, clientY: 465 });
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), false);
+});
+
+test('failed images, missing canvas contexts and rendering failures never capture transparent desktop input', async () => {
+  const cases = [
+    { dimensions: { naturalWidth: 0, naturalHeight: 0 } },
+    {},
+    { canvasContext: { drawImage() { throw new Error('Image decode failed'); } } },
+    { imageStyle: { transform: 'none', width: '0px', height: '604px' } },
+    { imageStyle: { transform: 'invalid', width: '403px', height: '604px' } },
+  ];
+  for (const options of cases) {
+    const harness = await rendererHarness(options);
+    await loadTestImages(harness, options.dimensions);
+    await harness.get('petHappyImage').dispatch('error');
+    await harness.openChat();
+    harness.setHitTarget('petVisual');
+    await harness.windowEvent('mousemove', { clientX: 100, clientY: 100 });
+    assert.equal(harness.calls.setIgnoreMouse.at(-1), true);
+  }
+});
+
+test('loaded alpha pixels restore exact hits including the registered tail beyond the parent, and read failure restores pass-through', async () => {
+  const reads = [];
+  const transforms = [];
+  let failRead = false;
+  const canvasContext = {
+    drawImage() {}, save() {}, restore() {},
+    setTransform: (...values) => transforms.push(values),
+    getImageData(x, y) {
+      reads.push({ x, y });
+      if (failRead) throw new Error('Pixel access unavailable');
+      const opaque = y > 700 && y < 800 && (x > 450 && x < 550 || x >= 1024 && x < 1056);
+      return { data: [0, 0, 0, opaque ? 255 : 0] };
+    },
+  };
+  const harness = await rendererHarness({ canvasContext });
+  const rect = { left: 100, top: 150, width: 403, height: 604 };
+  harness.get('petVisual').rect = rect;
+  const point = (x, y) => ({ clientX: rect.left + x / 1024 * rect.width, clientY: rect.top + y / 1536 * rect.height });
+  await harness.openChat();
+  harness.setHitTarget('petVisual');
+  await harness.windowEvent('mousemove', point(512, 768));
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), true);
+  await loadTestImages(harness);
+  assert.deepEqual(transforms, [[1, 0, 0, 1, 32, 0]]);
+  await harness.windowEvent('mousemove', point(512, 768));
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), false);
+  await harness.windowEvent('mousemove', point(25, 25));
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), true);
+  await harness.windowEvent('mousemove', point(1040, 768));
+  assert.ok(point(1040, 768).clientX > rect.left + rect.width);
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), false);
+  const readCount = reads.length;
+  await harness.windowEvent('mousemove', point(1060, 768));
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), true);
+  assert.equal(reads.length, readCount);
+  await harness.windowEvent('mousemove', point(512, 768));
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), false);
+  failRead = true;
+  await harness.windowEvent('mousemove', point(512, 768));
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), true);
+  const afterFailure = reads.length;
+  await harness.windowEvent('mousemove', point(512, 768));
+  assert.equal(reads.length, afterFailure);
+  harness.setHitTarget('chatInput');
+  await harness.windowEvent('mousemove', { clientX: 50, clientY: 600 });
+  assert.equal(harness.calls.setIgnoreMouse.at(-1), false);
+});
+
 test('all six opacity controls preview immediately, close rolls them back, and save persists exactly the selected fields', async () => {
   const harness = await rendererHarness({ floatingBubbleEnabled: true });
   const original = Object.fromEntries(Object.entries(opacityVariables).map(([name, variable]) => [name, harness.css(variable)]));

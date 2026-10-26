@@ -23,6 +23,7 @@ function assertContained(rect, area, margin = 0) {
 }
 
 function assertSafeLayout(layout) {
+  assert.deepEqual(layout.windowBounds, layout.workArea, 'native coordinates stay fixed to the active work area');
   assertContained(layout.windowBounds, layout.workArea);
   assertContained(screenRect(layout, layout.panel), layout.workArea, 8);
   assertContained(screenRect(layout, layout.greeting, layout.greeting.maxHeight + 24), layout.workArea, 8);
@@ -35,6 +36,25 @@ function assertSafeLayout(layout) {
   assert.ok(layout.petAnchor.y <= layout.workArea.y + layout.workArea.height + PET_BOTTOM_OVERFLOW + EPSILON);
   assert.ok(layout.windowBounds.width >= 114 && layout.windowBounds.height >= 114, 'the toolbar can fit inside visible bounds');
 }
+
+test('crossing the panel-side threshold never rebases the native frame or introduces a large local character jump', () => {
+  for (const workArea of [primary.workArea, secondary.workArea]) {
+    for (const scale of [0.78, 1, 1.18]) {
+      const threshold = workArea.x + workArea.width / 2 + 403 * 0.05 * scale;
+      const before = resolveDesktopLayout({ workArea, scale, petAnchor: { x: Math.floor(threshold), y: workArea.y + workArea.height + 20 } });
+      const after = resolveDesktopLayout({ workArea, scale, petAnchor: { x: Math.floor(threshold) + 1, y: before.petAnchor.y } });
+      assert.equal(before.panelSide, 'right');
+      assert.equal(after.panelSide, 'left');
+      assert.deepEqual(before.windowBounds, workArea);
+      assert.deepEqual(after.windowBounds, before.windowBounds);
+      close(after.petStage.left - before.petStage.left, after.petAnchor.x - before.petAnchor.x);
+      close(after.petStage.top, before.petStage.top);
+      close(after.windowBounds.x + before.petStage.left + 257.65, before.petAnchor.x);
+      assertSafeLayout(before);
+      assertSafeLayout(after);
+    }
+  }
+});
 
 test('independent panels, greeting including its tail, and the native frame stay inside all monitor edges', () => {
   for (const workArea of [
@@ -120,8 +140,14 @@ test('startup migrates the old fixed window position once and prioritizes the sa
   assert.deepEqual(restarted.restoreLayout().petAnchor, expected.petAnchor);
   restarted.createWindow();
   assert.deepEqual(restarted.windowBounds, expected.windowBounds);
+  restarted.windowCalls.length = 0;
   restarted.emitWindow('ready-to-show');
   assert.equal(restarted.rendererMessages[0].channel, 'desktop-layout');
+  assert.equal(restarted.windowCalls[0][0], 'setIgnoreMouseEvents');
+  assert.equal(restarted.windowCalls[0][1], true);
+  assert.equal(restarted.windowCalls[0][2].forward, true);
+  assert.ok(restarted.windowCalls.findIndex(([method]) => method === 'showInactive') > 0,
+    'the full work-area window starts forwarding mouse events before becoming visible');
 });
 
 test('incremental dragging follows the anchor across panel side changes without frame-induced drift', async (t) => {
@@ -137,6 +163,8 @@ test('incremental dragging follows the anchor across panel side changes without 
   const returned = await harness.invoke('window:get-layout');
   close(returned.petAnchor.x, before.petAnchor.x);
   assert.deepEqual(returned.windowBounds, before.windowBounds);
+  assert.equal(harness.boundsChanges.length, 0, '1,000 in-monitor pointer moves never call native setBounds');
+  assert.equal(harness.rendererMessages.filter(({ channel }) => channel === 'desktop-layout').length, 1000);
   harness.emit('window:move-by', { x: 100000, y: 100000 });
   const limit = await harness.invoke('window:get-layout');
   harness.emit('window:move-by', { x: 100, y: 100 });
@@ -146,6 +174,32 @@ test('incremental dragging follows the anchor across panel side changes without 
   close((await harness.invoke('window:get-layout')).petAnchor.y, limit.petAnchor.y - 1);
   await new Promise((resolve) => setTimeout(resolve, 380));
   assert.deepEqual((await persistedSettings(harness)).petPosition, (await harness.invoke('window:get-layout')).petAnchor);
+});
+
+test('cross-monitor dragging changes the native frame only once per monitor transition without changing layer or visibility', async (t) => {
+  for (const alwaysOnTop of [true, false]) {
+    const harness = await mainHarness(t, {
+      displays: [primary, secondary], saved: { scale: 0.78, alwaysOnTop, petPosition: { x: 700, y: 800 } },
+    });
+    harness.createWindow();
+    assert.equal(harness.windowState.visible, false);
+    harness.windowCalls.length = 0;
+    harness.setCursor({ x: -700, y: 800 });
+    harness.emit('window:move-by', { x: -1400, y: 0 });
+    assert.deepEqual(harness.windowBounds, secondary.workArea);
+    assert.equal(harness.boundsChanges.length, 1);
+    for (let index = 0; index < 100; index += 1) harness.emit('window:move-by', { x: -1, y: 0 });
+    assert.equal(harness.boundsChanges.length, 1);
+    harness.setCursor({ x: 700, y: 800 });
+    harness.emit('window:move-by', { x: 1500, y: 0 });
+    assert.deepEqual(harness.windowBounds, primary.workArea);
+    assert.equal(harness.boundsChanges.length, 2);
+    harness.emit('window:preview-scale', 1.18);
+    assert.equal(harness.boundsChanges.length, 2, 'changing character scale does not resize a work-area frame');
+    assert.equal(harness.windowState.visible, false);
+    assert.equal(harness.windowState.alwaysOnTop, alwaysOnTop);
+    assert.equal(harness.windowCalls.some(([method]) => ['showInactive', 'focus', 'moveTop', 'setAlwaysOnTop'].includes(method)), false);
+  }
 });
 
 test('startup and dragging respect a negative-coordinate monitor and disconnected positions recover to the primary display', async (t) => {
@@ -258,9 +312,14 @@ test('display removal and metrics changes reclamp a hidden pet without showing o
   harness.emitScreen('display-removed');
   const recovered = await harness.invoke('window:get-layout');
   assert.deepEqual(recovered.workArea, primary.workArea);
+  assert.equal(harness.boundsChanges.length, 1);
   assertSafeLayout(recovered);
   harness.setDisplays([{ workArea: { x: 0, y: 0, width: 800, height: 600 } }]);
   harness.emitScreen('display-metrics-changed');
+  assert.deepEqual(harness.windowBounds, { x: 0, y: 0, width: 800, height: 600 });
+  assert.equal(harness.boundsChanges.length, 2);
+  harness.emitScreen('display-metrics-changed');
+  assert.equal(harness.boundsChanges.length, 2, 'unchanged display metrics must not force native bounds again');
   assertSafeLayout(await harness.invoke('window:get-layout'));
   assert.equal(harness.windowState.visible, false);
   assert.equal(harness.windowCalls.some(([method]) => ['showInactive', 'focus', 'moveTop'].includes(method)), false);
