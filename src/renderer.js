@@ -11,6 +11,8 @@ const els = {
   petVisual: document.querySelector('#petVisual'),
   petImage: document.querySelector('#petImage'),
   petHappyImage: document.querySelector('#petHappyImage'),
+  petChibiImage: document.querySelector('#petChibiImage'),
+  petChibiHappyImage: document.querySelector('#petChibiHappyImage'),
   speechBubble: document.querySelector('#speechBubble'),
   bubbleText: document.querySelector('#bubbleText'),
   sparkles: document.querySelector('#sparkles'),
@@ -41,16 +43,20 @@ const OPACITY_FIELDS = {
 };
 
 let settings = {
-  petName: '鲸鱼娘',
+  petName: 'Desktopet',
+  petForm: 'original',
   city: '上海',
   modelId: modelConfig.DEFAULT_MODEL,
   proactiveEnabled: true,
   voiceEnabled: false,
-  scale: 1,
+  scale: 0.78,
   ...Object.fromEntries(Object.entries(OPACITY_FIELDS).map(([name, [, value]]) => [name, value])),
 };
 let bubbleTimer;
 let happyPoseTimer;
+let petClickTimer;
+let petFormSwitching = false;
+let lastPetPointerWasClick = false;
 let deepSeekPoseActive = false;
 let chatBusy = false;
 let lastReminderAt = Date.now();
@@ -64,6 +70,7 @@ let desktopLayout = null;
 let lastRequestedScale = null;
 
 const COMPANION_GREETING_INTERVAL_MS = 60 * 1000;
+const PET_DOUBLE_CLICK_INTERVAL_MS = 500;
 const proactiveLines = [
   '老师，我在这里。',
   '老师，今天也一起加油吧。',
@@ -114,13 +121,20 @@ function setMouseIgnore(ignore) {
   api?.setIgnoreMouse(ignore);
 }
 
+function petImages(form = settings.petForm) {
+  return form === 'chibi'
+    ? [els.petChibiImage, els.petChibiHappyImage]
+    : [els.petImage, els.petHappyImage];
+}
+
 function isOpaquePixel(clientX, clientY) {
-  if (!alphaContext || !alphaCanvas || !els.petImage.complete || !els.petHappyImage.complete) return false;
+  const [image, happyImage] = petImages();
+  if (!alphaContext || !alphaCanvas || !image.complete || !happyImage.complete) return false;
   const rect = els.petVisual.getBoundingClientRect();
   if (![clientX, clientY, rect.left, rect.top, rect.width, rect.height].every(Number.isFinite)
       || rect.width <= 0 || rect.height <= 0) return false;
-  const x = Math.floor((clientX - rect.left) / rect.width * els.petImage.naturalWidth);
-  const y = Math.floor((clientY - rect.top) / rect.height * els.petImage.naturalHeight);
+  const x = Math.floor((clientX - rect.left) / rect.width * image.naturalWidth);
+  const y = Math.floor((clientY - rect.top) / rect.height * image.naturalHeight);
   if (x < 0 || x >= alphaCanvas.width || y < 0 || y >= alphaCanvas.height) return false;
   try {
     return alphaContext.getImageData(x, y, 1, 1).data[3] > 18;
@@ -134,13 +148,14 @@ function isOpaquePixel(clientX, clientY) {
 function prepareAlphaMap() {
   alphaCanvas = null;
   alphaContext = null;
-  if (!els.petImage.complete || !els.petHappyImage.complete) return;
-  const imageWidth = els.petImage.naturalWidth;
-  const imageHeight = els.petImage.naturalHeight;
-  if (![imageWidth, imageHeight, els.petHappyImage.naturalWidth, els.petHappyImage.naturalHeight]
+  const [image, happyImage] = petImages();
+  if (!image.complete || !happyImage.complete) return;
+  const imageWidth = image.naturalWidth;
+  const imageHeight = image.naturalHeight;
+  if (![imageWidth, imageHeight, happyImage.naturalWidth, happyImage.naturalHeight]
     .every((value) => Number.isFinite(value) && value > 0)) return;
   try {
-    const happyStyle = window.getComputedStyle(els.petHappyImage);
+    const happyStyle = window.getComputedStyle(happyImage);
     const displayWidth = parseFloat(happyStyle.width);
     const displayHeight = parseFloat(happyStyle.height);
     if (![displayWidth, displayHeight].every((value) => Number.isFinite(value) && value > 0)) return;
@@ -154,13 +169,13 @@ function prepareAlphaMap() {
     canvas.height = imageHeight + Math.max(0, Math.ceil(offsetY));
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) return;
-    context.drawImage(els.petImage, 0, 0);
+    context.drawImage(image, 0, 0);
     context.save();
     context.setTransform(
       registration.a, registration.b, registration.c, registration.d,
       offsetX, offsetY,
     );
-    context.drawImage(els.petHappyImage, 0, 0, imageWidth, imageHeight);
+    context.drawImage(happyImage, 0, 0, imageWidth, imageHeight);
     context.restore();
     alphaCanvas = canvas;
     alphaContext = context;
@@ -177,14 +192,18 @@ function updateMousePassThrough(event) {
 }
 
 function applySettings(next) {
+  const previousForm = settings.petForm;
   settings = { ...settings, ...next };
+  settings.petForm = settings.petForm === 'chibi' ? 'chibi' : 'original';
+  els.petVisual.dataset.petForm = settings.petForm;
+  if (settings.petForm !== previousForm) prepareAlphaMap();
   settings.modelId = modelConfig.normalizeModelId(settings.modelId);
   applyVisualSettings(settings);
   syncPetName(settings.petName);
 }
 
 function applyVisualSettings(values) {
-  const requestedScale = Number(values.scale || 1);
+  const requestedScale = Number(values.scale || 0.78);
   document.documentElement.style.setProperty('--pet-scale', String(requestedScale));
   if (api.previewScale && requestedScale !== lastRequestedScale) {
     lastRequestedScale = requestedScale;
@@ -208,14 +227,14 @@ function previewVisualSettings() {
 }
 
 function syncPetName(name) {
-  const cleanName = String(name || '鲸鱼娘').trim() || '鲸鱼娘';
+  const cleanName = String(name || 'Desktopet').trim() || 'Desktopet';
   document.querySelectorAll('[data-pet-name]').forEach((element) => {
     element.textContent = cleanName;
   });
   document.querySelectorAll('[data-pet-name-placeholder]').forEach((element) => {
     element.placeholder = element.dataset.petNamePlaceholder.replace('{name}', cleanName);
   });
-  document.title = `${cleanName} 桌面陪伴`;
+  document.title = 'Desktopet';
 }
 
 function speak(text) {
@@ -282,6 +301,39 @@ function showHappyPose(duration = 800) {
     updateHappyPose();
   }, duration);
   updateHappyPose();
+}
+
+function clearPetClick() {
+  clearTimeout(petClickTimer);
+  petClickTimer = null;
+}
+
+async function togglePetForm(event) {
+  event.preventDefault();
+  clearPetClick();
+  if (petFormSwitching || dragState || !lastPetPointerWasClick || event.button > 0) return;
+  petFormSwitching = true;
+  const petForm = settings.petForm === 'chibi' ? 'original' : 'chibi';
+  try {
+    await Promise.all(petImages(petForm).map(async (image) => {
+      if (typeof image.decode === 'function') {
+        try { await image.decode(); } catch {
+          throw new Error('人物形象暂时无法加载，请重新打开后再试。');
+        }
+      }
+      if (!image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+        throw new Error('人物形象暂时无法加载，请重新打开后再试。');
+      }
+    }));
+    const { petLayout, ...updatedSettings } = await api.setPetForm(petForm);
+    applySettings(updatedSettings);
+    applyDesktopLayout(petLayout);
+  } catch (error) {
+    addMessage('system', error.message || '暂时无法切换人物形象，请稍后再试。');
+    openChat();
+  } finally {
+    petFormSwitching = false;
+  }
 }
 
 function holdHappyPose(active) {
@@ -514,6 +566,7 @@ async function saveSettings(event) {
 
 function beginDrag(event) {
   if (event.button !== 0) return;
+  lastPetPointerWasClick = false;
   dragState = { screenX: event.screenX, screenY: event.screenY, moved: 0 };
   els.petVisual.classList.add('dragging');
   els.petVisual.setPointerCapture(event.pointerId);
@@ -529,6 +582,7 @@ function moveDrag(event) {
     dragState.screenX = event.screenX;
     dragState.screenY = event.screenY;
     dragState.moved += Math.abs(dx) + Math.abs(dy);
+    if (dragState.moved >= 8) clearPetClick();
   }
 }
 
@@ -538,18 +592,25 @@ function endDrag(event) {
   dragState = null;
   els.petVisual.classList.remove('dragging');
   try { els.petVisual.releasePointerCapture(event.pointerId); } catch { /* already released */ }
-  if (moved < 8) {
+  if (event.type !== 'pointercancel' && moved < 8) {
+    lastPetPointerWasClick = true;
     sparkle(event.clientX, event.clientY);
     showHappyPose(800);
-    toggleChat();
+    clearPetClick();
+    petClickTimer = setTimeout(() => {
+      petClickTimer = null;
+      toggleChat();
+    }, PET_DOUBLE_CLICK_INTERVAL_MS);
+  } else {
+    clearPetClick();
   }
 }
 
 function wireEvents() {
-  els.petImage.addEventListener('load', prepareAlphaMap);
-  els.petHappyImage.addEventListener('load', prepareAlphaMap);
-  els.petImage.addEventListener('error', prepareAlphaMap);
-  els.petHappyImage.addEventListener('error', prepareAlphaMap);
+  for (const image of [...petImages('original'), ...petImages('chibi')]) {
+    image.addEventListener('load', prepareAlphaMap);
+    image.addEventListener('error', prepareAlphaMap);
+  }
   if (els.petImage.complete && els.petHappyImage.complete) prepareAlphaMap();
   window.addEventListener('mousemove', updateMousePassThrough);
   window.addEventListener('blur', () => {
@@ -562,8 +623,10 @@ function wireEvents() {
   els.petVisual.addEventListener('pointermove', moveDrag);
   els.petVisual.addEventListener('pointerup', endDrag);
   els.petVisual.addEventListener('pointercancel', endDrag);
+  els.petVisual.addEventListener('dblclick', togglePetForm);
   els.petVisual.addEventListener('contextmenu', (event) => {
     event.preventDefault();
+    clearPetClick();
     showContextToolbar(event);
   });
 

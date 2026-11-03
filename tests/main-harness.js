@@ -5,34 +5,41 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const storeModule = require('../src/conversation-store');
+const { LEGACY_COMPATIBILITY } = require('../src/legacy-migration');
 
-async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirectory,
+async function mainHarness(t, { store, fetchImpl, saved, legacy, legacyIndex = 0, selectedDirectory, isPackaged = false, platform = process.platform,
   apiKey = 'local-test-only',
   displays = [{ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }],
   windowBounds = { x: 900, y: 200, width: 780, height: 720 },
   cursorPoint = { x: 1000, y: 600 },
 } = {}) {
   const root = os.tmpdir();
-  const directory = await fs.mkdtemp(path.join(root, 'whale-girl-test-'));
+  const directory = await fs.mkdtemp(path.join(root, 'desktopet-test-'));
   let context;
   t.after(async () => {
     if (context) vm.runInContext('clearTimeout(moveSaveTimer);', context);
     assert.equal(path.dirname(directory), root);
-    assert.ok(path.basename(directory).startsWith('whale-girl-test-'));
+    assert.ok(path.basename(directory).startsWith('desktopet-test-'));
     await fs.rm(directory, { recursive: true, force: true });
   });
   const appPaths = {
     appData: directory,
-    userData: path.join(directory, 'whale-girl'),
+    userData: path.join(directory, 'Desktopet'),
     documents: path.join(directory, 'Documents'),
     temp: directory,
   };
-  for (const [name, data] of [['whale-girl', saved], ['qingyu-desktop-companion', legacy]]) {
+  for (const [name, data] of [['Desktopet', saved], [LEGACY_COMPATIBILITY.profileDirectories[legacyIndex], legacy]]) {
     if (!data) continue;
     const target = path.join(directory, name);
     await fs.mkdir(target, { recursive: true });
     await fs.writeFile(path.join(target, 'settings.json'), JSON.stringify(data));
-    if (name === 'qingyu-desktop-companion') await fs.writeFile(path.join(target, 'deepseek-key.bin'), 'encrypted-test-fixture');
+    if (name !== 'Desktopet') {
+      await fs.writeFile(path.join(target, 'deepseek-key.bin'), 'encrypted-test-fixture');
+      await fs.writeFile(path.join(target, 'Local State'), JSON.stringify({
+        os_crypt: { encrypted_key: 'synthetic-test-encryption-context', audit_enabled: true },
+        legacyCache: 'do-not-copy',
+      }));
+    }
   }
   const handlers = new Map();
   const eventHandlers = new Map();
@@ -54,6 +61,7 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
   let cursor = { ...cursorPoint };
   let availableDisplays = displays;
   let loginUpdates = 0;
+  const loginCalls = [];
   const testWindow = {
     setAlwaysOnTop(enabled, level) {
       windowCalls.push(['setAlwaysOnTop', enabled, level]);
@@ -95,13 +103,18 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
     },
   };
   const electron = {
+    net: { fetch: (...args) => {
+      if (!fetchImpl) return Promise.reject(new Error('Unexpected network request in isolated test.'));
+      return fetchImpl(...args);
+    } },
     app: {
+      isPackaged,
       whenReady: () => ({ then: (callback) => readyCallbacks.push(callback) }),
       on: (...args) => appEvents.on(...args),
       quit: () => { quitCalls += 1; appEvents.emit('before-quit'); },
       getPath: (name) => appPaths[name],
       setPath: (name, value) => { appPaths[name] = value; },
-      setLoginItemSettings() { loginUpdates += 1; },
+      setLoginItemSettings(options) { loginUpdates += 1; loginCalls.push(options); },
     },
     dialog: { showOpenDialog: async () => ({ canceled: !selectedDirectory, filePaths: selectedDirectory ? [selectedDirectory] : [] }) },
     BrowserWindow: function BrowserWindow(options) {
@@ -142,8 +155,8 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
       ? { ...storeModule, createConversationStore: store ? () => store : storeModule.createConversationStore }
       : require(name.startsWith('./') ? path.join(__dirname, '..', 'src', name) : name),
     __dirname: path.join(__dirname, '..', 'src'),
-    process: { ...process, env: { ...process.env, QINGYU_SCREENSHOT_PATH: '' } },
-    console, fetch: fetchImpl, AbortSignal, setTimeout, clearTimeout,
+    process: { ...process, platform, env: { ...process.env, DESKTOPET_SCREENSHOT_PATH: '' } },
+    console, fetch: () => { throw new Error('The main process must use the system network client.'); }, AbortSignal, setTimeout, clearTimeout,
     testWindow, testApiKey: apiKey,
   });
   const source = await fs.readFile(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
@@ -157,6 +170,7 @@ async function mainHarness(t, { store, fetchImpl, saved, legacy, selectedDirecto
     boundsChanges,
     windowCalls,
     rendererMessages,
+    loginCalls,
     get windowState() { return { ...windowState }; },
     get windowOptions() { return windowOptions; },
     get quitCalls() { return quitCalls; },

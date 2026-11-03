@@ -6,10 +6,10 @@ const root = path.resolve(__dirname, '..');
 const reportPath = path.join(root, 'dist', 'model-api-check', 'results.json');
 
 async function runLiveChecks() {
-  const { app, safeStorage } = require('electron');
+  const { app, safeStorage, net } = require('electron');
   const { MODEL_OPTIONS } = require('../src/model-config');
   const { mainHarness } = require('../tests/main-harness');
-  const profile = process.env.WHALE_MODEL_CHECK_PROFILE;
+  const profile = process.env.DESKTOPET_MODEL_CHECK_PROFILE;
   if (!profile) throw new Error('Run with node scripts/verify-model-api.cjs.');
   app.setPath('userData', profile);
   app.disableHardwareAcceleration();
@@ -17,7 +17,7 @@ async function runLiveChecks() {
   const report = { checkedAt: new Date().toISOString(), endpoint: 'https://api.deepseek.com/responses', checks: [] };
   const cleanup = [];
   try {
-    const secretFile = path.join(app.getPath('appData'), 'whale-girl', 'deepseek-key.bin');
+    const secretFile = path.join(app.getPath('appData'), 'Desktopet', 'deepseek-key.bin');
     report.credentialState = { encryptedFileExists: fs.existsSync(secretFile), encryptionAvailable: safeStorage.isEncryptionAvailable() };
     if (!report.credentialState.encryptionAvailable || !report.credentialState.encryptedFileExists) {
       throw new Error('SAVED_KEY_UNAVAILABLE');
@@ -38,7 +38,7 @@ async function runLiveChecks() {
             if (String(url) !== report.endpoint || ++requests > 1) throw new Error('UNEXPECTED_VERIFICATION_REQUEST');
             const body = JSON.parse(options.body);
             if (body.model !== id || body.reasoning?.effort !== 'max') throw new Error('PRODUCTION_MODEL_CONFIG_MISMATCH');
-            const response = await fetch(url, {
+            const response = await net.fetch(url, {
               ...options,
               redirect: 'error',
               body: JSON.stringify({ ...body, max_output_tokens: 512 }),
@@ -87,9 +87,9 @@ async function runLiveChecks() {
 
 function runIsolatedWorker() {
   if (process.platform !== 'win32') throw new Error('This check requires the saved Windows-encrypted app key.');
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-girl-model-check-'));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'desktopet-model-check-'));
   try {
-    const localStateFile = path.join(process.env.APPDATA, 'whale-girl', 'Local State');
+    const localStateFile = path.join(process.env.APPDATA, 'Desktopet', 'Local State');
     if (fs.existsSync(localStateFile)) {
       const localState = JSON.parse(fs.readFileSync(localStateFile, 'utf8'));
       if (typeof localState.os_crypt?.encrypted_key === 'string') {
@@ -99,7 +99,7 @@ function runIsolatedWorker() {
         } }));
       }
     }
-    const environment = { ...process.env, WHALE_MODEL_CHECK_PROFILE: profile };
+    const environment = { ...process.env, DESKTOPET_MODEL_CHECK_PROFILE: profile };
     for (const name of ['ELECTRON_RUN_AS_NODE', 'NODE_DEBUG', 'NODE_DEBUG_NATIVE', 'DEBUG', 'NODE_OPTIONS']) delete environment[name];
     const result = require('node:child_process').spawnSync(require('electron'), [`--user-data-dir=${profile}`, __filename, '--live-model-worker'], {
       cwd: root, env: environment, stdio: 'inherit', windowsHide: true, timeout: 150000,
@@ -108,7 +108,7 @@ function runIsolatedWorker() {
     process.exitCode = result.status ?? 1;
   } finally {
     const resolved = path.resolve(profile);
-    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('whale-girl-model-check-')) {
+    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('desktopet-model-check-')) {
       throw new Error('Unexpected verification profile path.');
     }
     fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

@@ -9,7 +9,7 @@ const projectRoot = path.resolve(__dirname, '..');
 async function runChecks() {
   const { app, BrowserWindow, screen } = require('electron');
   const { applyWindowLayer } = require('../src/window-layer');
-  const profile = process.env.WHALE_WINDOW_LAYER_PROFILE;
+  const profile = process.env.DESKTOPET_WINDOW_LAYER_PROFILE;
   assert(profile, 'Use node scripts/verify-window-layer.cjs');
   app.setPath('userData', profile);
   app.disableHardwareAcceleration();
@@ -54,7 +54,7 @@ async function runChecks() {
     results.push({ name, passed: true, ...details });
   };
   try {
-    const companion = await makeWindow('鲸鱼娘测试窗口', 40);
+    const companion = await makeWindow('Desktopet 测试窗口', 40);
     const ordinary = await makeWindow('普通应用测试窗口', 70);
     ordinary.show();
     companion.setAlwaysOnTop(true, 'floating');
@@ -158,9 +158,9 @@ async function runChecks() {
 
 function runWorker() {
   if (process.platform !== 'win32') throw new Error('Native window validation requires Windows.');
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-girl-window-check-'));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'desktopet-window-check-'));
   try {
-    const env = { ...process.env, WHALE_WINDOW_LAYER_PROFILE: profile };
+    const env = { ...process.env, DESKTOPET_WINDOW_LAYER_PROFILE: profile };
     delete env.ELECTRON_RUN_AS_NODE;
     const result = spawnSync(require('electron'), [__filename, '--window-layer-worker'], {
       cwd: projectRoot, env, stdio: 'inherit', windowsHide: true, timeout: 60000,
@@ -169,7 +169,7 @@ function runWorker() {
     process.exitCode = result.status ?? 1;
   } finally {
     const resolved = path.resolve(profile);
-    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('whale-girl-window-check-')) throw new Error('Unexpected test profile path.');
+    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('desktopet-window-check-')) throw new Error('Unexpected test profile path.');
     fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }

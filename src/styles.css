@@ -1,5 +1,6 @@
 :root {
   color-scheme: light;
+  --pet-scale: .78;
   --pet-opacity: 1;
   --chat-opacity: .8;
   --message-opacity: .88;
@@ -108,7 +109,7 @@ button:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
   width: 403px;
   height: 604px;
   transform-origin: 55% 100%;
-  transform: scale(var(--pet-scale, 1));
+  transform: scale(calc(var(--pet-scale, 1) * var(--pet-form-scale, 1)));
   opacity: var(--pet-opacity);
   filter: drop-shadow(0 15px 16px rgba(55, 48, 95, .21));
   cursor: grab;
@@ -116,6 +117,8 @@ button:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
   transition: filter 180ms ease;
   will-change: transform;
 }
+
+.pet-visual[data-pet-form="chibi"] { --pet-form-scale: .7; }
 
 .pet-image {
   position: absolute;
@@ -137,6 +140,19 @@ button:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
   opacity: 0;
   transform: translateX(3.125%);
   pointer-events: auto;
+}
+
+.pet-image-chibi,
+.pet-visual[data-pet-form="chibi"] .pet-image-original {
+  display: none;
+}
+
+.pet-visual[data-pet-form="chibi"] .pet-image-chibi {
+  display: block;
+}
+
+.pet-image-chibi.pet-image-happy {
+  transform: none;
 }
 
 .pet-visual.happy .pet-image-base {
@@ -161,19 +177,19 @@ button:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 .pet-visual.thinking { animation: thinking 1s ease-in-out infinite; }
 
 @keyframes breathe {
-  0%, 100% { transform: translateY(0) scale(var(--pet-scale, 1)); }
-  50% { transform: translateY(-6px) scale(var(--pet-scale, 1)); }
+  0%, 100% { transform: translateY(0) scale(calc(var(--pet-scale, 1) * var(--pet-form-scale, 1))); }
+  50% { transform: translateY(-6px) scale(calc(var(--pet-scale, 1) * var(--pet-form-scale, 1))); }
 }
 
 @keyframes hello {
-  0%, 100% { transform: translateY(0) scale(var(--pet-scale, 1)); }
-  38% { transform: translateY(-17px) scale(var(--pet-scale, 1)); }
-  68% { transform: translateY(-5px) scale(var(--pet-scale, 1)); }
+  0%, 100% { transform: translateY(0) scale(calc(var(--pet-scale, 1) * var(--pet-form-scale, 1))); }
+  38% { transform: translateY(-17px) scale(calc(var(--pet-scale, 1) * var(--pet-form-scale, 1))); }
+  68% { transform: translateY(-5px) scale(calc(var(--pet-scale, 1) * var(--pet-form-scale, 1))); }
 }
 
 @keyframes thinking {
-  0%, 100% { transform: translateY(0) scale(var(--pet-scale, 1)); }
-  50% { transform: translateY(-8px) scale(var(--pet-scale, 1)); }
+  0%, 100% { transform: translateY(0) scale(calc(var(--pet-scale, 1) * var(--pet-form-scale, 1))); }
+  50% { transform: translateY(-8px) scale(calc(var(--pet-scale, 1) * var(--pet-form-scale, 1))); }
 }
 
 .speech-bubble {

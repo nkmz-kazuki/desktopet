@@ -6,6 +6,11 @@ const LEGACY_ANCHOR_Y = 724;
 const PANEL_GAP = 12;
 const FRAME_MARGIN = 8;
 const PET_BOTTOM_OVERFLOW = 20;
+const CHIBI_SCALE = 0.7;
+
+function petFormScale(petForm) {
+  return petForm === 'chibi' ? CHIBI_SCALE : 1;
+}
 
 function clamp(value, min, max) {
   return Math.min(Math.max(min, max), Math.max(min, value));
@@ -15,24 +20,26 @@ function anchorFromLegacyPosition(position) {
   return { x: position.x + LEGACY_ANCHOR_X, y: position.y + LEGACY_ANCHOR_Y };
 }
 
-function resolveDesktopLayout({ petAnchor, scale = 1, workArea }) {
+function resolveDesktopLayout({ petAnchor, scale = 1, workArea, petForm = 'original' }) {
   const area = { ...workArea };
   const right = area.x + area.width;
   const bottom = area.y + area.height;
   const requestedScale = Number.isFinite(scale) ? clamp(scale, 0.01, 1.18) : 1;
+  const formScale = petFormScale(petForm);
   const effectiveScale = Math.max(0.01, Math.min(requestedScale,
-    (area.height - 16) / PET_HEIGHT, (area.width - 8) / (PET_WIDTH * 0.875)));
+    (area.height - 16) / (PET_HEIGHT * formScale), (area.width - 8) / (PET_WIDTH * 0.875 * formScale)));
+  const visualScale = effectiveScale * formScale;
   const desired = petAnchor && Number.isFinite(petAnchor.x) && Number.isFinite(petAnchor.y)
-    ? petAnchor : { x: right - 194.35, y: bottom - 4 };
+    ? petAnchor : { x: right - 13 - (PET_WIDTH - ORIGIN_X) * visualScale, y: bottom - 4 };
   const anchor = {
-    x: clamp(desired.x, area.x + 4 + ORIGIN_X * effectiveScale,
-      right - 4 - PET_WIDTH * (0.875 - 0.55) * effectiveScale),
-    y: clamp(desired.y, area.y + FRAME_MARGIN + PET_HEIGHT * effectiveScale, bottom + PET_BOTTOM_OVERFLOW),
+    x: clamp(desired.x, area.x + 4 + ORIGIN_X * visualScale,
+      right - 4 - PET_WIDTH * (0.875 - 0.55) * visualScale),
+    y: clamp(desired.y, area.y + FRAME_MARGIN + PET_HEIGHT * visualScale, bottom + PET_BOTTOM_OVERFLOW),
   };
   const pet = {
-    left: anchor.x - ORIGIN_X * effectiveScale,
-    right: anchor.x + (PET_WIDTH - ORIGIN_X) * effectiveScale,
-    top: anchor.y - PET_HEIGHT * effectiveScale,
+    left: anchor.x - ORIGIN_X * visualScale,
+    right: anchor.x + (PET_WIDTH - ORIGIN_X) * visualScale,
+    top: anchor.y - PET_HEIGHT * visualScale,
     bottom: anchor.y,
   };
   const panelWidth = Math.min(374, area.width - FRAME_MARGIN * 2);
@@ -83,4 +90,4 @@ function resolveDesktopLayout({ petAnchor, scale = 1, workArea }) {
   };
 }
 
-module.exports = { resolveDesktopLayout, anchorFromLegacyPosition, PET_BOTTOM_OVERFLOW };
+module.exports = { resolveDesktopLayout, anchorFromLegacyPosition, petFormScale, PET_BOTTOM_OVERFLOW };

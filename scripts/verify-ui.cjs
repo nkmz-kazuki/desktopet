@@ -5,12 +5,12 @@ const path = require('node:path');
 const rootDirectory = path.resolve(__dirname, '..');
 const outputDirectory = path.join(rootDirectory, 'dist', 'ui-check');
 const defaults = {
-  petName: '鲸鱼娘', city: '上海', modelId: 'deepseek-flash', reasoningEffort: 'max',
+  petName: 'Desktopet', petForm: 'original', city: '上海', modelId: 'deepseek-flash', reasoningEffort: 'max',
   proactiveEnabled: false, voiceEnabled: false, alwaysOnTop: false, launchAtLogin: false,
-  scale: 1, apiKeySet: false,
+  scale: 0.78, apiKeySet: false,
   petOpacity: 100, chatOpacity: 80, messageOpacity: 88,
   inputOpacity: 92, textOpacity: 100, bubbleOpacity: 50,
-  conversationDirectory: 'D:\\鲸鱼娘\\对话积累',
+  conversationDirectory: 'D:\\Desktopet\\对话积累',
 };
 
 function installMockBridge() {
@@ -39,6 +39,12 @@ function installMockBridge() {
       settings = { ...settings, ...values };
       return { ...settings };
     },
+    setPetForm: async (petForm) => {
+      record('setPetForm', petForm);
+      failIfRequested('setPetForm');
+      settings = { ...settings, petForm };
+      return { ...settings };
+    },
     clearApiKey: async () => { settings.apiKeySet = false; },
     getWeather: async () => ({ city: '上海', condition: '晴', temperature: 24, feelsLike: 24, low: 18, high: 26, rainChance: 0 }),
     sendChat: (message) => {
@@ -51,7 +57,7 @@ function installMockBridge() {
     previewScale: (scale) => record('previewScale', scale),
     openApiKeys: async () => record('openApiKeys'),
     openConversationFolder: async () => { record('openConversationFolder'); failIfRequested('openConversationFolder'); },
-    chooseConversationDirectory: async () => { record('chooseConversationDirectory'); failIfRequested('chooseConversationDirectory'); return 'D:\\鲸鱼娘\\选定目录'; },
+    chooseConversationDirectory: async () => { record('chooseConversationDirectory'); failIfRequested('chooseConversationDirectory'); return 'D:\\Desktopet\\选定目录'; },
     hide: () => record('hide'),
     quit: () => record('quit'),
     onOpenChat: subscribe('chat'),
@@ -802,7 +808,7 @@ async function verifyNeumorphicApplication({ window, evaluate, check, settle, de
         { textareaOutline: focusedInput.outlineStyle, textareaPaintedOutlineWidth: focusedInput.paintedOutlineWidth,
           composerOutline: focusedComposer.outlineStyle, composerPaintedOutlineWidth: focusedComposer.paintedOutlineWidth, composerBorder: focusedComposer.borderColor,
           composerBorderWidth: focusedComposer.borderWidth, ringContrast: borderContrast(focusedComposer) });
-      const keyboardMessage = 'Hello whale';
+      const keyboardMessage = 'Hello Desktopet';
       for (const character of keyboardMessage) window.webContents.sendInputEvent({ type: 'char', keyCode: character });
       await waitFor(`document.querySelector('#chatInput').value === ${JSON.stringify(keyboardMessage)}`);
       await capture('chat-neumorphism-focus');
@@ -1140,7 +1146,7 @@ async function verifyDesktopLayouts({ window, evaluate, check, settle, capture, 
 async function runElectronChecks() {
   const { app, BrowserWindow, ipcMain, nativeImage } = require('electron');
   const assert = require('node:assert/strict');
-  const profileDirectory = process.env.WHALE_GIRL_QA_PROFILE;
+  const profileDirectory = process.env.DESKTOPET_QA_PROFILE;
   assert(profileDirectory, 'Run this check with node scripts/verify-ui.cjs');
   for (const name of ['profile', 'session']) fs.mkdirSync(path.join(profileDirectory, name));
   app.setPath('userData', path.join(profileDirectory, 'profile'));
@@ -1166,7 +1172,7 @@ async function runElectronChecks() {
     webPreferences: {
       preload: __filename, contextIsolation: true, nodeIntegration: false,
       sandbox: false, backgroundThrottling: false, offscreen: true,
-      partition: 'whale-girl-ui-check',
+      partition: 'desktopet-ui-check',
     },
   });
   window.webContents.setFrameRate(30);
@@ -1198,6 +1204,13 @@ async function runElectronChecks() {
       bubble.getClientRects().length === 0 && getComputedStyle(bubble).display === 'none' && !bubbleTimer;
   }; void 0;`);
   await evaluate('Promise.all([...document.images].map(image => image.decode()))');
+  const branding = await evaluate(`({ title: document.title, appLabel: document.querySelector('#app').getAttribute('aria-label'),
+    defaultNames: [...document.querySelectorAll('[data-pet-name]')].map(element => element.textContent),
+    avatar: { source: document.querySelector('#avatarDot img').getAttribute('src'),
+      decoded: document.querySelector('#avatarDot img').complete && document.querySelector('#avatarDot img').naturalWidth > 0 } })`);
+  check('default application branding is Desktopet and the avatar uses the original character image', branding.title === 'Desktopet' &&
+    branding.appLabel.includes('Desktopet') && branding.defaultNames.length > 0 && branding.defaultNames.every(name => name === 'Desktopet') &&
+    branding.avatar.source === '../assets/character.png' && branding.avatar.decoded, branding);
   await evaluate(`window.__qaReadPoseGeometry = () => {
     const visual = document.querySelector('#petVisual');
     const visualStyle = getComputedStyle(visual);
@@ -1256,7 +1269,7 @@ async function runElectronChecks() {
     hasEyebrow: Boolean(document.querySelector('#bubbleEyebrow')), greeting: document.querySelector('#bubbleText').textContent,
     speechTemplates: [...speechInitialGreetings] })`);
   check('startup hides the floating greeting while retaining the chat greeting and dynamic placeholder',
-    initialCopy.placeholder === '想问鲸鱼娘点什么...' && !initialCopy.hasEyebrow && await evaluate('window.__qaFloatingBubbleHidden()') &&
+    initialCopy.placeholder === '想问Desktopet点什么...' && !initialCopy.hasEyebrow && await evaluate('window.__qaFloatingBubbleHidden()') &&
     await evaluate('document.querySelector("#messages .message.assistant .bubble").textContent.length > 0') &&
     initialCopy.speechTemplates.length > 0 && initialCopy.speechTemplates.every(text => !text.includes('{name}') && !text.includes(defaults.petName) && !/deepseek|模型/i.test(text)), initialCopy);
   await capture('startup-hidden-floating');
@@ -1352,7 +1365,7 @@ async function runElectronChecks() {
     previewStyles.composer.endsWith('0.6)') && previewStyles.text.endsWith('0.45)') && previewStyles.bubble.endsWith('0.4)'), previewStyles);
   await evaluate('document.querySelector("#chooseConversationDirectoryBtn").click()');
   await waitFor('document.querySelector("#conversationDirectoryInput").value.endsWith("选定目录")');
-  const pastedDirectory = 'D:\\Whale Girl\\对话存档';
+  const pastedDirectory = 'D:\\Desktopet\\对话存档';
   await evaluate(`document.querySelector('#conversationDirectoryInput').value = ${JSON.stringify(pastedDirectory)};
     document.querySelector('#settingsForm').requestSubmit();`);
   await waitFor('!document.querySelector("#settingsPanel").classList.contains("open")');
@@ -1514,6 +1527,68 @@ async function runElectronChecks() {
   await waitFor('!document.querySelector("#chatPanel").classList.contains("open")');
   check('second real tail click closes chat without moving the window', await evaluate('window.__qa.snapshot().calls.filter(call => call.name === "moveBy").length === 0'));
   await delay(850);
+  await evaluate(`closePanels(); holdHappyPose(false); document.querySelector('#petVisual').style.animation = 'none';
+    window.__qaFindPetPoint = () => {
+      const rect = document.querySelector('#petVisual').getBoundingClientRect();
+      for (let y = Math.max(2, Math.ceil(rect.top)); y < Math.min(innerHeight - 2, rect.bottom); y += 3) {
+        for (let x = Math.max(2, Math.ceil(rect.left)); x < Math.min(innerWidth - 2, rect.right); x += 3) {
+          if (isOpaquePixel(x, y) && document.elementFromPoint(x, y)?.closest('#petVisual')) return { x, y };
+        }
+      }
+      return null;
+    }; void 0;`);
+  const doubleClickPetAt = async (point) => {
+    window.webContents.sendInputEvent({ type: 'mouseMove', ...point });
+    await delay(30);
+    for (const clickCount of [1, 2]) {
+      window.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount });
+      window.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount });
+      await delay(70);
+    }
+  };
+  await evaluate('applySettings({ scale: window.__qa.snapshot().settings.scale })');
+  const originalPetRect = await evaluate(`(() => {
+    const rect = document.querySelector('#petVisual').getBoundingClientRect();
+    return { width: rect.width, height: rect.height, bottom: rect.bottom };
+  })()`);
+  await doubleClickPetAt(await evaluate('window.__qaFindPetPoint()'));
+  await waitFor('document.querySelector("#petVisual").dataset.petForm === "chibi"');
+  await delay(850);
+  const chibiDisplay = await evaluate(`({
+    panelOpen: document.querySelector('#chatPanel').classList.contains('open'),
+    savedForm: window.__qa.snapshot().settings.petForm,
+    calls: window.__qa.snapshot().calls.filter(call => call.name === 'setPetForm').map(call => call.value),
+    original: getComputedStyle(document.querySelector('#petImage')).display,
+    chibi: getComputedStyle(document.querySelector('#petChibiImage')).display,
+    happyTransform: getComputedStyle(document.querySelector('#petChibiHappyImage')).transform,
+    rect: (() => { const rect = document.querySelector('#petVisual').getBoundingClientRect();
+      return { width: rect.width, height: rect.height, bottom: rect.bottom }; })(),
+    point: window.__qaFindPetPoint(),
+    imageSizes: ['#petChibiImage', '#petChibiHappyImage'].map(selector => {
+      const image = document.querySelector(selector); return [image.naturalWidth, image.naturalHeight];
+    }),
+  })`);
+  check('native double click switches to the preloaded chibi pair without toggling chat',
+    chibiDisplay.savedForm === 'chibi' && chibiDisplay.calls.at(-1) === 'chibi' &&
+    !chibiDisplay.panelOpen && chibiDisplay.original === 'none' && chibiDisplay.chibi === 'block' &&
+    chibiDisplay.happyTransform === 'none' && Boolean(chibiDisplay.point) &&
+    chibiDisplay.imageSizes[0].join(',') === chibiDisplay.imageSizes[1].join(','), chibiDisplay);
+  check('chibi scales both axes to 70 percent while keeping the feet anchored',
+    Math.abs(chibiDisplay.rect.width / originalPetRect.width - 0.7) < 0.002 &&
+    Math.abs(chibiDisplay.rect.height / originalPetRect.height - 0.7) < 0.002 &&
+    Math.abs(chibiDisplay.rect.bottom - originalPetRect.bottom) < 1,
+    { originalPetRect, chibiRect: chibiDisplay.rect });
+  await capture('chibi-idle');
+  await evaluate('openChat(); holdHappyPose(true)');
+  await capture('chibi-smile');
+  await doubleClickPetAt(chibiDisplay.point);
+  await waitFor('document.querySelector("#petVisual").dataset.petForm === "original"');
+  await delay(850);
+  check('native double click returns to the original form while keeping open chat and a held smile',
+    await evaluate(`document.querySelector('#chatPanel').classList.contains('open') &&
+      document.querySelector('#petVisual').classList.contains('happy') && window.__qa.snapshot().settings.petForm === 'original' &&
+      getComputedStyle(document.querySelector('#petChibiImage')).display === 'none'`));
+  await evaluate(`holdHappyPose(false); closePanels(); document.querySelector('#petVisual').style.animation = '';`);
   await evaluate('applySettings({ scale: 1.18 }); window.__qa.emit("settings")');
   check('opening settings at the largest stored character size does not reveal the floating bubble', await evaluate('window.__qaFloatingBubbleHidden()'));
   await verifyDesktopLayouts({ window, evaluate, check, settle, capture, waitFor });
@@ -1527,10 +1602,10 @@ async function runElectronChecks() {
 
 function runIsolatedWorker() {
   const { spawnSync } = require('node:child_process');
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-girl-ui-check-'));
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'desktopet-ui-check-'));
   let exitCode = 1;
   try {
-    const environment = { ...process.env, WHALE_GIRL_QA_PROFILE: temporaryRoot };
+    const environment = { ...process.env, DESKTOPET_QA_PROFILE: temporaryRoot };
     delete environment.ELECTRON_RUN_AS_NODE;
     const result = spawnSync(require('electron'), [__filename, '--ui-check-worker'], {
       cwd: rootDirectory, env: environment, stdio: 'inherit', windowsHide: true, timeout: 150000,
@@ -1539,7 +1614,7 @@ function runIsolatedWorker() {
     exitCode = result.status ?? 1;
   } finally {
     const resolved = path.resolve(temporaryRoot);
-    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('whale-girl-ui-check-')) {
+    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('desktopet-ui-check-')) {
       throw new Error('Unexpected temporary profile path');
     }
     fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

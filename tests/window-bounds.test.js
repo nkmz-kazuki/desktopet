@@ -37,6 +37,27 @@ function assertSafeLayout(layout) {
   assert.ok(layout.windowBounds.width >= 114 && layout.windowBounds.height >= 114, 'the toolbar can fit inside visible bounds');
 }
 
+test('chibi stays at 70 percent and its actual size determines screen limits', () => {
+  for (const workArea of [primary.workArea, secondary.workArea, { x: 0, y: 0, width: 800, height: 480 }]) {
+    for (const scale of [0.78, 1, 1.18]) {
+      const left = resolveDesktopLayout({ workArea, scale, petForm: 'chibi', petAnchor: { x: -100000, y: 100000 } });
+      const effectiveScale = workArea.height === 480 && scale === 1.18 ? 464 / 422.8 : scale;
+      close(left.scale, effectiveScale);
+      close(left.petAnchor.x - 221.65 * effectiveScale * 0.7, workArea.x + 4);
+      assert.ok(left.petAnchor.y - 604 * effectiveScale * 0.7 >= workArea.y + 8 - EPSILON);
+      close(left.petAnchor.y, workArea.y + workArea.height + PET_BOTTOM_OVERFLOW);
+      assert.equal(left.panelSide, 'right');
+      const panel = screenRect(left, left.panel);
+      close(panel.x, left.petAnchor.x + 181.35 * effectiveScale * 0.7 + 12);
+      assertContained(panel, workArea, 8);
+      const right = resolveDesktopLayout({ workArea, scale, petForm: 'chibi', petAnchor: { x: 100000, y: 100000 } });
+      close(workArea.x + workArea.width - (right.petAnchor.x - 221.65 * effectiveScale * 0.7), 403 * effectiveScale * 0.7 * 0.875 + 4);
+      assert.equal(right.panelSide, 'left');
+      assertContained(screenRect(right, right.panel), workArea, 8);
+    }
+  }
+});
+
 test('crossing the panel-side threshold never rebases the native frame or introduces a large local character jump', () => {
   for (const workArea of [primary.workArea, secondary.workArea]) {
     for (const scale of [0.78, 1, 1.18]) {
@@ -233,6 +254,40 @@ test('a pet whose feet cross a stacked display boundary restores on the screen c
   assert.deepEqual(restarted.restoreLayout(), layout);
   const initial = resolveDesktopLayout({ workArea: primary.workArea });
   assert.equal(initial.petAnchor.y, 956, 'new default placement does not automatically push feet below the screen');
+});
+
+test('switching and dragging the smaller form updates panel placement and safely reclamps the original', async (t) => {
+  const harness = await mainHarness(t, { displays: [primary], saved: { scale: 1, petPosition: { x: 700, y: 800 } } });
+  harness.createWindow();
+  const before = await harness.invoke('window:get-layout');
+  const switched = await harness.invoke('pet:set-form', 'chibi');
+  assert.equal(switched.petForm, 'chibi');
+  assert.equal(switched.scale, 1);
+  assert.deepEqual(switched.petLayout.petAnchor, before.petAnchor);
+  assert.equal(harness.boundsChanges.length, 0);
+  harness.setCursor({ x: 0, y: 800 });
+  harness.emit('window:move-by', { x: -10000, y: 0 });
+  const atLeft = await harness.invoke('window:get-layout');
+  close(atLeft.petAnchor.x - 221.65 * 0.7, 4);
+  assert.equal(atLeft.panelSide, 'right');
+  assertContained(screenRect(atLeft, atLeft.panel), primary.workArea, 8);
+  const back = await harness.invoke('pet:set-form', 'original');
+  close(back.petLayout.petAnchor.x - 221.65, 4);
+  assert.equal(back.scale, 1);
+  assert.equal(back.petLayout.panelSide, 'right');
+  assert.equal(harness.boundsChanges.length, 0);
+});
+
+test('a saved small form restores on the monitor containing most of its actual body', async (t) => {
+  const lower = { workArea: { x: 0, y: 960, width: 1536, height: 960 } };
+  const harness = await mainHarness(t, {
+    displays: [primary, lower], saved: { petForm: 'chibi', scale: 1, petPosition: { x: 1200, y: 1200 } },
+  });
+  harness.createWindow();
+  const layout = await harness.invoke('window:get-layout');
+  assert.deepEqual(layout.workArea, lower.workArea);
+  close(layout.petAnchor.y - 604 * 0.7, lower.workArea.y + 8);
+  assert.equal((await harness.invoke('settings:get')).petForm, 'chibi');
 });
 
 test('scale preview does not save anchors or preferences, cancellation restores them, and save commits the chosen layout', async (t) => {

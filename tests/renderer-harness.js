@@ -20,10 +20,10 @@ async function rendererHarness(options = {}) {
   const ids = new Map();
   let hitTargetId = 'petVisual';
   const bridgeEvents = new Map();
-  const calls = { saveSettings: [], sendChat: [], moveBy: [], setIgnoreMouse: [], previewScale: [], spoken: [], chooseDirectory: 0 };
+  const calls = { saveSettings: [], setPetForm: [], sendChat: [], moveBy: [], setIgnoreMouse: [], previewScale: [], spoken: [], chooseDirectory: 0 };
   const opacityDefaults = { petOpacity: 100, chatOpacity: 80, messageOpacity: 88, inputOpacity: 92, textOpacity: 100, bubbleOpacity: 50 };
   let saved = {
-    petName: '鲸鱼娘', city: '上海', modelId: 'deepseek-flash', reasoningEffort: 'max', scale: 1,
+    petName: 'Desktopet', city: '上海', modelId: 'deepseek-flash', reasoningEffort: 'max', scale: 1,
     proactiveEnabled: true, voiceEnabled: false,
     quietStart: 23, quietEnd: 8, alwaysOnTop: true, launchAtLogin: false,
     conversationDirectory: path.resolve('example-conversations'), ...opacityDefaults, ...options.settings,
@@ -181,6 +181,12 @@ async function rendererHarness(options = {}) {
       saved = { ...saved, ...next };
       return { ...saved };
     },
+    setPetForm: async (petForm) => {
+      calls.setPetForm.push(petForm);
+      if (options.formError) throw new Error(options.formError);
+      saved = { ...saved, petForm };
+      return { ...saved };
+    },
     sendChat: async (text) => {
       calls.sendChat.push(text);
       return options.sendChat ? options.sendChat(text) : { text: '已回答。', kind: 'model' };
@@ -219,7 +225,10 @@ async function rendererHarness(options = {}) {
   Object.assign(window, {
     petAPI: api, location: { search: '' }, innerWidth: 780, innerHeight: 720,
     speechSynthesis: { cancel() {}, speak: (utterance) => calls.spoken.push(utterance.text) },
-    getComputedStyle: () => options.imageStyle || { transform: 'matrix(1,0,0,1,12.59375,0)', width: '403px', height: '604px' },
+    getComputedStyle: (element) => options.imageStyle || {
+      transform: element?.classList.contains('pet-image-chibi') ? 'none' : 'matrix(1,0,0,1,12.59375,0)',
+      width: '403px', height: '604px',
+    },
   });
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }

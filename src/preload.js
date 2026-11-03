@@ -9,6 +9,7 @@ function on(channel, callback) {
 contextBridge.exposeInMainWorld('petAPI', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
+  setPetForm: (petForm) => ipcRenderer.invoke('pet:set-form', petForm),
   clearApiKey: () => ipcRenderer.invoke('settings:clear-key'),
   getWeather: (force = false) => ipcRenderer.invoke('weather:get', force),
   sendChat: (message) => ipcRenderer.invoke('chat:send', message),

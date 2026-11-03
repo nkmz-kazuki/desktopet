@@ -67,12 +67,12 @@ function createConversationStore(directory = path.join(os.homedir(), 'Documents'
     await handle.close();
   }
 
-  async function appendExchange({ question, answer, petName = '鲸鱼娘', askedAt = Date.now(), failed = false }) {
+  async function appendExchange({ question, answer, petName = 'Desktopet', askedAt = Date.now(), failed = false }) {
     if (typeof question !== 'string' || !question.trim() || typeof answer !== 'string') {
       throw new Error('问答记录格式无效。');
     }
     const { day, time } = localDateParts(askedAt);
-    const name = String(petName).replace(/[\r\n*]/g, '').trim() || '鲸鱼娘';
+    const name = String(petName).replace(/[\r\n*]/g, '').trim() || 'Desktopet';
     return enqueue(async () => {
       try {
         await initializeFile();

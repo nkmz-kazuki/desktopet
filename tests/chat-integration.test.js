@@ -40,7 +40,7 @@ async function scenario(t, { responses, search = () => jsonResponse(searchResult
   const harness = await mainHarness(t, { saved, fetchImpl: async (url, options) => {
     const endpoint = String(url);
     const body = options?.body ? JSON.parse(options.body) : undefined;
-    calls.push({ url: endpoint, method: options?.method, body });
+    calls.push({ url: endpoint, method: options?.method, body, credentials: options?.credentials, redirect: options?.redirect });
     if (endpoint === 'https://api.deepseek.com/responses') {
       const next = responses[responseIndex++];
       assert.notEqual(next, undefined, 'the model loop must not make an unplanned extra request');
@@ -72,6 +72,59 @@ test('both active model IDs reach the Responses request with max reasoning even 
       assert.deepEqual(harness.modelCalls()[0].body.reasoning, { effort: 'max' });
       assert.equal(harness.searchCalls().length, 0);
     });
+  }
+});
+
+test('transport errors reach the UI and archive in Chinese and a retry keeps the failed exchange out of model history', async (t) => {
+  let failed = true;
+  const bodies = [];
+  const harness = await mainHarness(t, { fetchImpl: async (_url, options) => {
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.redirect, 'error');
+    bodies.push(JSON.parse(options.body));
+    if (failed) throw new TypeError('fetch failed', { cause: Object.assign(new Error('private transport details'), { code: 'ECONNREFUSED' }) });
+    return jsonResponse(finalAnswer('连接已恢复。'));
+  } });
+  const first = await harness.invoke('chat:send', '第一条普通消息');
+  assert.match(first.error, /无法连接聊天服务.*系统代理/);
+  assert.doesNotMatch(first.error, /fetch failed|private transport/);
+  const archive = await fs.readFile((await harness.invoke('settings:get')).conversationFile, 'utf8');
+  assert.ok(archive.includes(first.error));
+  assert.doesNotMatch(archive, /fetch failed|private transport/);
+  failed = false;
+  const second = await harness.invoke('chat:send', '重试普通消息');
+  assert.equal(second.text, '连接已恢复。');
+  assert.deepEqual(bodies[1].input, [{ role: 'user', content: '重试普通消息' }]);
+});
+
+test('a dropped response body is reported as a connection error rather than an empty model answer', async (t) => {
+  const stream = new ReadableStream({ start(controller) {
+    controller.error(new TypeError('fetch failed', { cause: Object.assign(new Error('private socket'), { code: 'ECONNRESET' }) }));
+  } });
+  const harness = await scenario(t, { responses: [new Response(stream)] });
+  const result = await harness.invoke('chat:send', '讲个故事');
+  assert.match(result.error, /无法连接聊天服务/);
+  assert.doesNotMatch(result.error, /有效答案|private socket|fetch failed/);
+});
+
+test('weather requests share the system-network route and return safe errors from both weather IPC and chat', async (t) => {
+  const harness = await mainHarness(t, { fetchImpl: async (_url, options) => {
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.redirect, 'error');
+    throw new TypeError('fetch failed');
+  } });
+  await assert.rejects(harness.invoke('weather:get', true), /无法连接天气服务.*系统代理/);
+  const result = await harness.invoke('chat:send', '现在天气怎么样？');
+  assert.match(result.error, /无法连接天气服务.*系统代理/);
+  assert.doesNotMatch(result.error, /fetch failed/);
+});
+
+test('authentication, balance and rate-limit errors remain distinct from network failures', async (t) => {
+  for (const [status, expected] of [[401, /API Key 无效/], [402, /余额不足/], [429, /请求较多/]]) {
+    const harness = await scenario(t, { responses: [jsonResponse({ error: 'private provider details' }, status)] });
+    const result = await harness.invoke('chat:send', '普通问候');
+    assert.match(result.error, expected);
+    assert.doesNotMatch(result.error, /private provider|fetch failed/);
   }
 });
 
@@ -194,6 +247,10 @@ test('fresh-information requests execute real search plumbing, return tool outpu
   assert.equal(harness.searchCalls().length, 1);
   assert.equal(harness.searchCalls()[0].method, 'POST');
   assert.equal(harness.searchCalls()[0].body.query, '2026 奖项 官方信息');
+  for (const request of harness.calls) {
+    assert.equal(request.credentials, 'omit');
+    assert.equal(request.redirect, 'error');
+  }
   assert.equal(harness.modelCalls()[0].body.tool_choice, 'auto');
   assert.equal(harness.modelCalls()[1].body.tool_choice, 'auto');
   const secondInput = harness.modelCalls()[1].body.input;

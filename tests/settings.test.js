@@ -3,9 +3,23 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { normalizeConversationDirectory } = require('../src/conversation-store');
+const { LEGACY_COMPATIBILITY, MIGRATION_MARKER } = require('../src/legacy-migration');
 const { mainHarness } = require('./main-harness');
 
-test('migrates only settings and encrypted key, preserving customized preferences and removing obsolete fields', async (t) => {
+test('fresh installs start with the smallest original form and persist it for the next launch', async (t) => {
+  const harness = await mainHarness(t);
+  const settings = await harness.invoke('settings:get');
+  assert.equal(settings.petName, 'Desktopet');
+  assert.equal(settings.scale, 0.78);
+  assert.equal(settings.petForm, 'original');
+  assert.equal(settings.reasoningEffort, 'max');
+  const saved = JSON.parse(await fs.readFile(path.join(harness.appPaths.userData, 'settings.json'), 'utf8'));
+  const reloaded = await mainHarness(t, { saved });
+  assert.equal((await reloaded.invoke('settings:get')).scale, 0.78);
+  assert.equal(reloaded.restoreLayout().scale, 0.78);
+});
+
+test('migrates settings and their paired encrypted key context, preserving customized preferences and removing obsolete fields', async (t) => {
   const { invoke, appPaths, directory } = await mainHarness(t, { legacy: {
     petName: '自定义昵称', city: '北京', reasoningEffort: 'high', chatLayout: 'compact',
     model: 'obsolete-model', reminderMinutes: 40, obsolete: true, apiKey: 'never-persist-this',
@@ -22,15 +36,68 @@ test('migrates only settings and encrypted key, preserving customized preference
   const saved = JSON.parse(await fs.readFile(path.join(appPaths.userData, 'settings.json'), 'utf8'));
   for (const key of ['model', 'reminderMinutes', 'chatLayout', 'obsolete', 'apiKey']) assert.equal(key in saved, false);
   assert.equal(await fs.readFile(path.join(appPaths.userData, 'deepseek-key.bin'), 'utf8'), 'encrypted-test-fixture');
-  assert.equal((await fs.readdir(appPaths.userData)).length, 2);
-  assert.ok(await fs.stat(path.join(directory, 'qingyu-desktop-companion', 'settings.json')));
+  assert.equal(appPaths.userData, path.join(directory, 'Desktopet'));
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(appPaths.userData, 'Local State'), 'utf8')), {
+    os_crypt: { encrypted_key: 'synthetic-test-encryption-context', audit_enabled: true },
+  });
+  assert.deepEqual((await fs.readdir(appPaths.userData)).sort(), ['Local State', MIGRATION_MARKER, 'deepseek-key.bin', 'settings.json'].sort());
+  assert.ok(await fs.stat(path.join(directory, LEGACY_COMPATIBILITY.profileDirectories[0], 'settings.json')));
 });
 
 test('renames the previous built-in nickname and never replaces existing new-version preferences', async (t) => {
-  const { invoke } = await mainHarness(t, { saved: { petName: 'hazuki', city: '杭州' }, legacy: { petName: '旧昵称', city: '广州' } });
+  const { invoke } = await mainHarness(t, { saved: { petName: LEGACY_COMPATIBILITY.builtInNames[0], city: '杭州' }, legacy: { petName: '旧昵称', city: '广州' } });
   const settings = await invoke('settings:get');
-  assert.equal(settings.petName, '鲸鱼娘');
+  assert.equal(settings.petName, 'Desktopet');
   assert.equal(settings.city, '杭州');
+});
+
+test('migration retains every current preference and archive destination before app readiness', async (t) => {
+  const conversationDirectory = path.join(require('node:os').tmpdir(), 'desktopet-existing-archive-fixture');
+  const preferences = {
+    petName: 'deepseek', city: '南京', modelId: 'deepseek-v4-pro', reasoningEffort: 'max',
+    proactiveEnabled: false, voiceEnabled: true, quietStart: 22, quietEnd: 7,
+    scale: 0.88, alwaysOnTop: false, launchAtLogin: true,
+    petOpacity: 91, chatOpacity: 65, messageOpacity: 72, inputOpacity: 81, textOpacity: 95, bubbleOpacity: 41,
+    petPosition: { x: -600, y: 700 }, windowPosition: { x: -1920, y: 0 }, conversationDirectory,
+  };
+  const harness = await mainHarness(t, { legacy: preferences });
+  const actual = await harness.invoke('settings:get');
+  for (const [key, value] of Object.entries(preferences)) assert.deepEqual(JSON.parse(JSON.stringify(actual[key])), value, key);
+  assert.equal(harness.loginUpdates, 0);
+  assert.equal(harness.windowOptions, undefined);
+});
+
+test('all built-in nickname aliases become Desktopet while custom names remain unchanged', async (t) => {
+  for (const petName of LEGACY_COMPATIBILITY.builtInNames) {
+    const harness = await mainHarness(t, { saved: { petName } });
+    assert.equal((await harness.invoke('settings:get')).petName, 'Desktopet');
+  }
+});
+
+test('saved login preferences update only the packaged canonical entry and development never writes startup settings', async (t) => {
+  const development = await mainHarness(t);
+  await development.invoke('settings:save', { launchAtLogin: true });
+  assert.equal(development.loginUpdates, 0);
+  const packaged = await mainHarness(t, { isPackaged: true, platform: 'win32' });
+  for (const launchAtLogin of [true, false]) {
+    await packaged.invoke('settings:save', { launchAtLogin });
+    const call = packaged.loginCalls.at(-1);
+    assert.equal(call.name, 'Desktopet');
+    assert.equal(call.path, process.execPath);
+    assert.equal(call.openAtLogin, launchAtLogin);
+  }
+});
+
+test('packaged startup migrates login entries after ready without changing the saved launch preference', async (t) => {
+  const harness = await mainHarness(t, { isPackaged: true, platform: 'win32', legacy: { launchAtLogin: true } });
+  assert.equal(harness.loginUpdates, 0);
+  await harness.startApp();
+  assert.equal(harness.loginCalls[0].name, 'Desktopet');
+  assert.equal(harness.loginCalls[0].path, process.execPath);
+  assert.equal(harness.loginCalls[0].openAtLogin, true);
+  assert.deepEqual(harness.loginCalls.slice(1).map((call) => call.name), [...LEGACY_COMPATIBILITY.startupEntryNames]);
+  assert.equal(harness.loginCalls.slice(1).every((call) => call.openAtLogin === false), true);
+  assert.equal((await harness.invoke('settings:get')).launchAtLogin, true);
 });
 
 test('default model preferences use Flash and max reasoning, migrating old levels without reviving obsolete model settings', async (t) => {
@@ -147,7 +214,7 @@ test('rejects invalid or unwritable folders before applying any setting and perm
       modelId: 'deepseek-v4-pro', reasoningEffort: 'max',
     }));
     assert.equal(await fs.readFile(path.join(appPaths.userData, 'settings.json'), 'utf8'), initial);
-    assert.equal((await invoke('settings:get')).petName, '鲸鱼娘');
+    assert.equal((await invoke('settings:get')).petName, 'Desktopet');
     assert.equal((await invoke('settings:get')).modelId, 'deepseek-flash');
     assert.equal((await invoke('settings:get')).reasoningEffort, 'max');
     assert.equal(harness.loginUpdates, 0);

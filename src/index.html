@@ -7,16 +7,16 @@
       content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>鲸鱼娘</title>
+    <title>Desktopet</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main id="app" aria-label="鲸鱼娘桌面陪伴">
+    <main id="app" aria-label="Desktopet 桌面陪伴">
       <section id="chatPanel" class="side-panel interactive" aria-label="聊天框">
         <header class="panel-header">
           <div id="avatarDot" class="avatar-dot" aria-hidden="true"><img src="../assets/character.png" alt="" /></div>
           <div class="panel-title">
-            <strong id="chatTitle">和 <b data-pet-name>鲸鱼娘</b> 聊聊</strong>
+            <strong id="chatTitle">和 <b data-pet-name>Desktopet</b> 聊聊</strong>
             <span><i class="online-dot"></i> 在线</span>
           </div>
           <button id="clearChatBtn" class="icon-button" title="新对话" aria-label="新对话">↻</button>
@@ -26,7 +26,7 @@
         <div id="messages" class="messages" aria-live="polite"></div>
 
         <form id="chatForm" class="composer">
-          <textarea id="chatInput" rows="1" maxlength="8000" placeholder="想问鲸鱼娘点什么..." data-pet-name-placeholder="想问{name}点什么..." aria-label="聊天消息"></textarea>
+          <textarea id="chatInput" rows="1" maxlength="8000" placeholder="想问Desktopet点什么..." data-pet-name-placeholder="想问{name}点什么..." aria-label="聊天消息"></textarea>
           <button id="sendBtn" type="submit" aria-label="发送消息">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.3 3.7 21 11.2a.9.9 0 0 1 0 1.6L4.3 20.3a.9.9 0 0 1-1.2-1.1l1.7-5.6 8.2-1.6-8.2-1.6-1.7-5.6a.9.9 0 0 1 1.2-1.1Z"/></svg>
           </button>
@@ -99,18 +99,33 @@
         </div>
 
         <div id="sparkles" class="sparkles" aria-hidden="true"></div>
-        <div id="petVisual" class="pet-visual interactive" role="button" aria-label="与桌面陪伴人物互动">
+        <div id="petVisual" class="pet-visual interactive" role="button" aria-label="与桌面陪伴人物互动，双击切换形象" data-pet-form="original">
           <img
             id="petImage"
-            class="pet-image pet-image-base"
+            class="pet-image pet-image-base pet-image-original"
             src="../assets/character.png"
             alt="蓝紫色长发、女仆裙与鲸尾的桌面陪伴人物"
             draggable="false"
           />
           <img
             id="petHappyImage"
-            class="pet-image pet-image-happy"
+            class="pet-image pet-image-happy pet-image-original"
             src="../assets/character-happy.png"
+            alt=""
+            aria-hidden="true"
+            draggable="false"
+          />
+          <img
+            id="petChibiImage"
+            class="pet-image pet-image-base pet-image-chibi"
+            src="../assets/character-chibi.png"
+            alt="Q版蓝发鲸尾桌面陪伴人物"
+            draggable="false"
+          />
+          <img
+            id="petChibiHappyImage"
+            class="pet-image pet-image-happy pet-image-chibi"
+            src="../assets/character-chibi-happy.png"
             alt=""
             aria-hidden="true"
             draggable="false"
